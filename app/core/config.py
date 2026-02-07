@@ -8,7 +8,10 @@
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict
-import tomllib
+try:
+    import tomllib  # Python 3.11+
+except ImportError:
+    import tomli as tomllib  # Python 3.10 及以下
 
 from app.core.logger import logger
 
