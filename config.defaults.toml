@@ -88,6 +88,16 @@ image_ws_final_min_bytes = 100000
 image_ws_medium_min_bytes = 30000
 
 
+# ==================== 视频生成 ====================
+[video]
+# 是否启用 WebSocket 直连生成视频（需要 Grok 官方支持，默认关闭）
+# 注意：视频 WebSocket 端点 wss://grok.com/ws/video/listen 尚未确认可用
+# 如需测试，可设置为 true
+video_ws = false
+# WebSocket 生成视频时的阻塞超时秒数
+video_ws_blocked_seconds = 60
+
+
 # ==================== Token 池管理 ====================
 [token]
 # 是否启用 Token 自动刷新

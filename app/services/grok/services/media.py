@@ -19,8 +19,10 @@ from app.core.exceptions import (
 from app.services.grok.models.model import ModelService
 from app.services.token import get_token_manager, EffortType
 from app.services.grok.processors import VideoStreamProcessor, VideoCollectProcessor
+from app.services.grok.processors import VideoWSStreamProcessor, VideoWSCollectProcessor
 from app.services.grok.utils.headers import apply_statsig, build_sso_cookie
 from app.services.grok.utils.stream import wrap_stream_with_usage
+from app.services.grok.services.video import video_ws_service
 
 CREATE_POST_API = "https://grok.com/rest/media/post/create"
 CHAT_API = "https://grok.com/rest/app-chat/conversations/new"
@@ -313,6 +315,7 @@ class VideoService:
 
         think = {"enabled": True, "disabled": False}.get(thinking)
         is_stream = stream if stream is not None else get_config("chat.stream")
+        use_ws = get_config("video.video_ws")
 
         # 提取内容
         from app.services.grok.services.chat import MessageExtractor
@@ -337,7 +340,35 @@ class VideoService:
             finally:
                 await upload_service.close()
 
-        # 生成视频
+        # 根据配置选择生成方式
+        if use_ws:
+            return await VideoService._completions_ws(
+                model, token, token_mgr, prompt, image_url,
+                aspect_ratio, video_length, resolution, preset,
+                is_stream, think
+            )
+        else:
+            return await VideoService._completions_rest(
+                model, token, token_mgr, prompt, image_url,
+                aspect_ratio, video_length, resolution, preset,
+                is_stream, think
+            )
+
+    @staticmethod
+    async def _completions_rest(
+        model: str,
+        token: str,
+        token_mgr,
+        prompt: str,
+        image_url: Optional[str],
+        aspect_ratio: str,
+        video_length: int,
+        resolution: str,
+        preset: str,
+        is_stream: bool,
+        think: bool,
+    ):
+        """REST API 方式生成视频"""
         service = VideoService()
         if image_url:
             response = await service.generate_from_image(
@@ -364,10 +395,60 @@ class VideoService:
                 else EffortType.LOW
             )
             await token_mgr.consume(token, effort)
-            logger.debug(f"Video completed, recorded usage (effort={effort.value})")
+            logger.debug(f"Video REST completed, recorded usage (effort={effort.value})")
         except Exception as e:
             logger.warning(f"Failed to record video usage: {e}")
         return result
+
+    @staticmethod
+    async def _completions_ws(
+        model: str,
+        token: str,
+        token_mgr,
+        prompt: str,
+        image_url: Optional[str],
+        aspect_ratio: str,
+        video_length: int,
+        resolution: str,
+        preset: str,
+        is_stream: bool,
+        think: bool,
+    ):
+        """WebSocket 方式生成视频"""
+        # 先创建 post 获取 post_id
+        service = VideoService()
+        async with _get_semaphore():
+            if image_url:
+                post_id = await service.create_image_post(token, image_url)
+            else:
+                post_id = await service.create_post(token, prompt)
+
+            # 使用 WebSocket 生成
+            ws_response = video_ws_service.stream(
+                token, prompt, post_id,
+                aspect_ratio, video_length, resolution, preset
+            )
+
+            # 处理响应
+            if is_stream:
+                processor = VideoWSStreamProcessor(model, token, think)
+                return wrap_stream_with_usage(
+                    processor.process(ws_response), token_mgr, token, model
+                )
+
+            result = await VideoWSCollectProcessor(model, token, think).process(ws_response)
+            try:
+                model_info = ModelService.get(model)
+                effort = (
+                    EffortType.HIGH
+                    if (model_info and model_info.cost.value == "high")
+                    else EffortType.LOW
+                )
+                await token_mgr.consume(token, effort)
+                logger.debug(f"Video WS completed, recorded usage (effort={effort.value})")
+            except Exception as e:
+                logger.warning(f"Failed to record video usage: {e}")
+            return result
 
 
 __all__ = ["VideoService"]
