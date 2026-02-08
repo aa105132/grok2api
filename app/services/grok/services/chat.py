@@ -410,6 +410,14 @@ class ChatService:
                 status_code=429,
             )
 
+        # 自动开启 NSFW 模式（首次使用时触发，后台执行不阻塞）
+        if get_config("chat.auto_nsfw"):
+            try:
+                from app.services.grok.services.nsfw import ensure_nsfw_enabled
+                await ensure_nsfw_enabled(token, token_mgr)
+            except Exception as e:
+                logger.warning(f"Auto NSFW enable failed: {e}")
+
         # 解析参数
         think = {"enabled": True, "disabled": False}.get(thinking)
         is_stream = stream if stream is not None else get_config("chat.stream")
@@ -466,8 +474,8 @@ class ChatService:
             
             if is_stream:
                 logger.debug(f"Processing image stream response: model={model}")
-                # 强制使用 url 格式以便处理
-                image_format = get_config("app.image_format", "b64_json")
+                # chat completions 中图片以 markdown 形式内嵌，优先使用 b64_json 确保数据完整
+                image_format = get_config("app.image_format") or "b64_json"
                 processor = ImageWSStreamProcessor(model, token, n, image_format)
                 
                 async def chat_stream_wrapper():
@@ -559,7 +567,7 @@ class ChatService:
                 )
             else:
                 logger.debug(f"Processing image collect response: model={model}")
-                image_format = get_config("app.image_format", "b64_json")
+                image_format = get_config("app.image_format") or "b64_json"
                 processor = ImageWSCollectProcessor(model, token, n, image_format)
                 image_results = await processor.process(gen_request)
                 

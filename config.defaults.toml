@@ -6,8 +6,8 @@ app_url = "http://127.0.0.1:8000"
 app_key = "grok2api"
 # API 调用密钥（可选）
 api_key = ""
-# 生成图片的格式（url 或 base64）
-image_format = "url"
+# 生成图片的格式（b64_json, base64, url）
+image_format = "b64_json"
 # 生成视频的格式（html 或 url）
 video_format = "html"
 
@@ -46,6 +46,8 @@ thinking = true
 dynamic_statsig = true
 # 过滤的特殊标签列表
 filter_tags = ["xaiartifact","xai:tool_usage_card","grok:render"]
+# 是否在首次聊天时自动开启 NSFW 模式
+auto_nsfw = true
 
 
 # ==================== 重试策略 ====================

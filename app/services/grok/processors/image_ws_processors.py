@@ -13,7 +13,7 @@ from app.core.config import get_config
 from app.core.logger import logger
 from app.core.storage import DATA_DIR
 from app.core.exceptions import UpstreamException
-from .base import BaseProcessor
+from .base import BaseProcessor, ASSET_URL
 
 
 class ImageWSBaseProcessor(BaseProcessor):
@@ -79,38 +79,118 @@ class ImageWSBaseProcessor(BaseProcessor):
             d["blob_size"] = size
             return size
 
+        def merge_url(target: Dict, source: Dict) -> Dict:
+            """确保结果中保留最佳 URL 信息（用于 fallback 下载高质量图片）
+            
+            优先使用 final 阶段的 URL（指向高质量图片），
+            其次使用任何可用的 URL。
+            """
+            source_url = source.get("url", "")
+            target_url = target.get("url", "")
+            
+            # 如果 source 有 URL 且 source 是 final，优先使用 source 的 URL
+            if source_url and source.get("is_final"):
+                target["url"] = source_url
+            # 如果 target 没有 URL，使用 source 的
+            elif not target_url and source_url:
+                target["url"] = source_url
+            return target
+
         # 如果 incoming 是 final 但没有 blob，尝试保留 existing 的 blob 并标记为 final
         if incoming.get("is_final") and not incoming.get("blob") and existing.get("blob"):
             res = existing.copy()
             res["is_final"] = True
-            return res
+            return merge_url(res, incoming)
 
         if incoming.get("is_final") and not existing.get("is_final"):
             # 只有当 incoming 有内容时才替换，否则只更新标记
             if incoming.get("blob"):
                 if "blob_size" not in incoming:
                     incoming["blob_size"] = len(incoming["blob"])
-                return incoming
+                return merge_url(incoming, existing)
             res = existing.copy()
             res["is_final"] = True
-            return res
+            return merge_url(res, incoming)
 
         if existing.get("is_final") and not incoming.get("is_final"):
-            return existing
+            # 保留 existing，但如果 incoming 有更新的 url，也合并进来
+            return merge_url(existing, incoming)
         
         if get_size(incoming) > get_size(existing):
-            return incoming
-        return existing
+            return merge_url(incoming, existing)
+        return merge_url(existing, incoming)
 
-    def _to_output(self, image_id: str, item: Dict) -> str:
+    async def _to_output(self, image_id: str, item: Dict) -> str:
         try:
-            if self.response_format == "url":
-                return self._save_blob(
-                    image_id, item.get("blob", ""), item.get("is_final", False)
+            blob = item.get("blob", "")
+            url = item.get("url", "")
+            is_final = item.get("is_final", False)
+
+            # 判断 blob 是否为 final 质量
+            # 如果 blob 存在但不满足 final 大小阈值，说明是 medium/preview 质量
+            blob_size = len(blob) if blob else 0
+            final_min_bytes = get_config("image.image_ws_final_min_bytes")
+            blob_is_final_quality = blob_size >= final_min_bytes
+
+            # 对于 final 图片，如果 blob 不是 final 质量，优先通过 URL 下载高质量版本
+            if is_final and url and not blob_is_final_quality:
+                logger.info(
+                    f"Final image {image_id} has low-quality blob ({blob_size} bytes), "
+                    f"downloading HD from URL: {url[:80]}"
                 )
-            return self._strip_base64(item.get("blob", ""))
+                hd_b64 = await self._download_from_url(url, image_id)
+                if hd_b64:
+                    if self.response_format == "url":
+                        return self._save_blob(image_id, hd_b64, True)
+                    return hd_b64
+
+            if self.response_format == "url":
+                # 先尝试从 blob 保存
+                result = self._save_blob(
+                    image_id, blob, is_final
+                )
+                if result:
+                    return result
+                # blob 为空，尝试通过 URL 下载后保存
+                if url:
+                    logger.info(f"Blob empty for {image_id} (url mode), downloading from URL: {url[:80]}")
+                    b64 = await self._download_from_url(url, image_id)
+                    if b64:
+                        return self._save_blob(image_id, b64, is_final)
+                return ""
+
+            # b64_json / base64 模式：返回 base64 数据
+            b64 = self._strip_base64(blob)
+            if b64:
+                return b64
+            # blob 为空，尝试通过 URL 下载并转 base64
+            if url:
+                logger.info(f"Blob empty for {image_id}, downloading from URL: {url[:80]}")
+                return await self._download_from_url(url, image_id)
+            return ""
         except Exception as e:
             logger.warning(f"Image output failed: {e}")
+            return ""
+
+    async def _download_from_url(self, url: str, image_id: str) -> str:
+        """异步下载 URL 并转 base64（用于 blob 为空时 fallback）"""
+        try:
+            dl_service = self._get_dl()
+            # 构建路径
+            if url.startswith("http"):
+                from urllib.parse import urlparse
+                path = urlparse(url).path
+            else:
+                path = url
+
+            base64_data = await dl_service.to_base64(path, self.token, "image")
+            if base64_data:
+                if "," in base64_data:
+                    return base64_data.split(",", 1)[1]
+                return base64_data
+            return ""
+        except Exception as e:
+            logger.warning(f"Download fallback failed for {image_id}: {e}")
             return ""
 
 
@@ -219,7 +299,7 @@ class ImageWSStreamProcessor(ImageWSBaseProcessor):
 
         for i, item in enumerate(selected_items):
             image_id = item.get("image_id", "")
-            output = self._to_output(image_id, item)
+            output = await self._to_output(image_id, item)
             if not output:
                 continue
 
@@ -278,7 +358,7 @@ class ImageWSCollectProcessor(ImageWSBaseProcessor):
 
         results: List[str] = []
         for item in selected:
-            output = self._to_output(item.get("image_id", ""), item)
+            output = await self._to_output(item.get("image_id", ""), item)
             if output:
                 results.append(output)
 

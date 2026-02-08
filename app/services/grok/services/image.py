@@ -67,12 +67,20 @@ class ImageService:
         ) and blob_size > get_config("image.image_ws_final_min_bytes")
 
     def _classify_image(self, url: str, blob: str) -> Optional[Dict[str, object]]:
-        if not url or not blob:
+        if not url:
             return None
 
         image_id = self._extract_image_id(url) or uuid.uuid4().hex
-        blob_size = len(blob)
-        is_final = self._is_final_image(url, blob_size)
+        blob_size = len(blob) if blob else 0
+
+        # 判断是否为 final 图片：
+        # 1. 有 blob 数据时，按原始逻辑判断（URL 扩展名 + 大小阈值）
+        # 2. blob 为空但 URL 以 .jpg/.jpeg 结尾，也标记为 final（后续通过 URL 下载）
+        if blob_size > 0:
+            is_final = self._is_final_image(url, blob_size)
+        else:
+            # blob 为空过 URL 扩展名判断是否可能是 final 图片
+            is_final = (url or "").lower().endswith((".jpg", ".jpeg"))
 
         stage = (
             "final"

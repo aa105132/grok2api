@@ -180,4 +180,57 @@ class NSFWService:
             return NSFWResult(success=False, http_status=0, error=str(e)[:100])
 
 
-__all__ = ["NSFWService", "NSFWResult"]
+async def ensure_nsfw_enabled(token: str, token_mgr) -> bool:
+    """
+    确保 token 已开启 NSFW 模式（自动开启，首次使用时触发）
+    
+    通过 tags 中是否包含 "nsfw" 来判断。
+    如果未开启，自动调用 NSFWService.enable() 开启。
+    
+    Args:
+        token: SSO token
+        token_mgr: TokenManager 实例
+    
+    Returns:
+        是否已开启或成功开启
+    """
+    # 检查是否启用自动 NSFW
+    from app.core.config import get_config
+    if not get_config("chat.auto_nsfw"):
+        return False
+
+    # 检查 token 是否已有 nsfw tag
+    raw_token = token[4:] if token.startswith("sso=") else token
+    for pool in token_mgr.pools.values():
+        info = pool.get(raw_token)
+        if info:
+            if "nsfw" in info.tags:
+                logger.debug(f"Token {raw_token[:10]}... already has nsfw tag")
+                return True
+            if "nsfw_failed" in info.tags:
+                logger.debug(f"Token {raw_token[:10]}... previously failed nsfw enable")
+                return False
+            break
+    else:
+        # token 未找到
+        return False
+
+    # 未开启，执行开启
+    logger.info(f"Token {raw_token[:10]}... auto-enabling NSFW mode")
+    nsfw_service = NSFWService()
+    result = await nsfw_service.enable(token)
+
+    if result.success:
+        await token_mgr.add_tag(token, "nsfw")
+        logger.info(f"Token {raw_token[:10]}... NSFW enabled successfully")
+        return True
+    else:
+        await token_mgr.add_tag(token, "nsfw_failed")
+        logger.warning(
+            f"Token {raw_token[:10]}... NSFW enable failed: "
+            f"http={result.http_status} grpc={result.grpc_status} err={result.error}"
+        )
+        return False
+
+
+__all__ = ["NSFWService", "NSFWResult", "ensure_nsfw_enabled"]
