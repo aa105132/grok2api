@@ -431,6 +431,44 @@ class TokenManager:
                 return True
         return False
 
+    async def get_age_verified(self, token: str) -> int:
+        """
+        获取年龄验证状态
+
+        Args:
+            token: Token 字符串
+
+        Returns:
+            0=未验证, 1=已验证, 2=验证失败
+        """
+        raw_token = token[4:] if token.startswith("sso=") else token
+        for pool in self.pools.values():
+            info = pool.get(raw_token)
+            if info:
+                return info.age_verified
+        return 0
+
+    async def set_age_verified(self, token: str, status: int = 1) -> bool:
+        """
+        设置年龄验证状态
+
+        Args:
+            token: Token 字符串
+            status: 验证状态 (0=未验证, 1=已验证, 2=验证失败)
+
+        Returns:
+            是否成功
+        """
+        raw_token = token[4:] if token.startswith("sso=") else token
+        for pool in self.pools.values():
+            info = pool.get(raw_token)
+            if info:
+                info.age_verified = status
+                self._schedule_save()
+                logger.info(f"Token {raw_token[:10]}...: age_verified set to {status}")
+                return True
+        return False
+
     async def remove(self, token: str) -> bool:
         """
         删除 Token

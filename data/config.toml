@@ -1,7 +1,7 @@
 [app]
 app_url = "http://127.0.0.1:8000"
 app_key = "grok2api"
-api_key = ""
+api_key = "pwd"
 image_format = "url"
 video_format = "html"
 

@@ -1,7 +1,11 @@
 services:
   grok2api:
     container_name: grok2api
-    image: ghcr.io/chenyme/grok2api:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # 如果想使用预构建镜像（不包含本地更改），取消下一行注释并注释掉 build 部分
+    # image: ghcr.io/chenyme/grok2api:latest
     ports:
       - "8000:8000"
     environment:

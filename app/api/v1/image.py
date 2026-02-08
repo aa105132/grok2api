@@ -26,6 +26,7 @@ from app.services.grok.processors import (
     ImageWSStreamProcessor,
     ImageWSCollectProcessor,
 )
+from app.services.grok.services.age_verify import ensure_age_verified
 from app.services.token import get_token_manager, EffortType
 from app.core.exceptions import ValidationException, AppException, ErrorType
 from app.core.config import get_config
@@ -226,8 +227,13 @@ async def _wrap_stream_with_usage(stream, token_mgr, token, model_info):
                 logger.warning(f"Failed to consume token: {e}")
 
 
-async def _get_token(model: str):
-    """获取可用 token"""
+async def _get_token(model: str, ensure_age: bool = False):
+    """获取可用 token
+    
+    Args:
+        model: 模型名称
+        ensure_age: 是否确保年龄验证（用于图像生成）
+    """
     token_mgr = await get_token_manager()
     await token_mgr.reload_if_stale()
 
@@ -244,6 +250,13 @@ async def _get_token(model: str):
             code="rate_limit_exceeded",
             status_code=429,
         )
+
+    # 如果需要年龄验证，在返回前自动完成验证
+    if ensure_age:
+        try:
+            await ensure_age_verified(token, token_mgr)
+        except Exception as e:
+            logger.warning(f"Age verification failed: {e}")
 
     return token_mgr, token
 
@@ -317,8 +330,8 @@ async def create_image(request: ImageGenerationRequest):
     response_format = resolve_response_format(request.response_format)
     response_field = response_field_name(response_format)
 
-    # 获取 token 和模型信息
-    token_mgr, token = await _get_token(request.model)
+    # 获取 token 和模型信息（自动年龄验证）
+    token_mgr, token = await _get_token(request.model, ensure_age=True)
     model_info = ModelService.get(request.model)
     use_ws = bool(get_config("image.image_ws"))
 
@@ -584,8 +597,8 @@ async def edit_image(
         b64 = base64.b64encode(content).decode()
         images.append(f"data:{mime};base64,{b64}")
 
-    # 获取 token 和模型信息
-    token_mgr, token = await _get_token(edit_request.model)
+    # 获取 token 和模型信息（自动年龄验证）
+    token_mgr, token = await _get_token(edit_request.model, ensure_age=True)
     model_info = ModelService.get(edit_request.model)
 
     # 上传图片

@@ -66,6 +66,9 @@ class TokenInfo(BaseModel):
     # 冷却管理
     last_sync_at: Optional[int] = None  # 上次同步时间
 
+    # 年龄验证状态 (0=未验证, 1=已验证, 2=验证失败)
+    age_verified: int = 0
+
     # 扩展
     tags: List[str] = Field(default_factory=list)
     note: str = ""
