@@ -14,7 +14,7 @@ services:
       SERVER_PORT: 8000
       SERVER_WORKERS: 1
       SERVER_STORAGE_TYPE: local
-      # SERVER_STORAGE_URL: 
+      # SERVER_STORAGE_URL:
 
       # SERVER_STORAGE_TYPE: (local, redis, mysql, pgsql) default: local
       # SERVER_STORAGE_URL: (local mode is empty) default: empty
@@ -24,4 +24,10 @@ services:
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
+    networks:
+      - 1panel-network
     restart: unless-stopped
+
+networks:
+  1panel-network:
+    external: true
