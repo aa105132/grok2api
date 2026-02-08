@@ -203,7 +203,7 @@ class ImageWSStreamProcessor(ImageWSBaseProcessor):
             ]
 
         for image_id, item in selected:
-            output = self._strip_base64(item.get("blob", ""))
+            output = self._to_output(image_id, item)
             if not output:
                 continue
 
@@ -215,7 +215,7 @@ class ImageWSStreamProcessor(ImageWSBaseProcessor):
                 "image_generation.completed",
                 {
                     "type": "image_generation.completed",
-                    "b64_json": output,
+                    self.response_field: output,
                     "created_at": int(time.time()),
                     "size": self.size,
                     "index": index,
@@ -237,7 +237,7 @@ class ImageWSCollectProcessor(ImageWSBaseProcessor):
     ):
         super().__init__(model, token, response_format)
         self.n = n
-
+    
     async def process(self, response: AsyncIterable[dict]) -> List[str]:
         images: Dict[str, Dict] = {}
 

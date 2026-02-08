@@ -455,7 +455,7 @@ class ChatService:
             message, _ = MessageExtractor.extract(messages)
             
             # 调用图片服务
-            image_gen = image_service.stream(token, message)
+            gen_request = image_service.stream(token, message)
             
             if is_stream:
                 logger.debug(f"Processing image stream response: model={model}")
@@ -480,7 +480,7 @@ class ChatService:
                     }
                     yield f"data: {orjson.dumps(role_chunk).decode()}\n\n"
 
-                    async for sse_msg in processor.process(image_gen):
+                    async for sse_msg in processor.process(gen_request):
                         if not sse_msg.strip():
                             continue
                         
@@ -496,7 +496,7 @@ class ChatService:
                                 
                                 if not data_line:
                                     continue
-                                    
+                                
                                 data = orjson.loads(data_line)
                                 
                                 content = ""
@@ -506,6 +506,9 @@ class ChatService:
                                 elif url := data.get("url"):
                                     img_id = str(uuid.uuid4())[:8]
                                     content = f"![{img_id}]({url})\n"
+                                elif b64 := data.get("base64"):
+                                    img_id = str(uuid.uuid4())[:8]
+                                    content = f"![{img_id}](data:image/jpeg;base64,{b64})\n"
                                 
                                 if content:
                                     chunk = {
@@ -554,7 +557,7 @@ class ChatService:
                 logger.debug(f"Processing image collect response: model={model}")
                 image_format = get_config("app.image_format")
                 processor = ImageWSCollectProcessor(model, token, response_format=image_format)
-                image_results = await processor.process(image_gen)
+                image_results = await processor.process(gen_request)
                 
                 # 将图片结果转回 chat 标准输出格式
                 content = ""
