@@ -27,6 +27,10 @@ class AgeVerifyResult:
     error: Optional[str] = None
 
 
+# 默认超时时间（秒）
+DEFAULT_TIMEOUT = 120.0
+
+
 class AgeVerifyService:
     """年龄验证服务
     
@@ -34,8 +38,21 @@ class AgeVerifyService:
     """
 
     def __init__(self, proxy: str = None):
-        self.proxy = proxy or get_config("network.base_proxy_url")
-        self.timeout = float(get_config("network.timeout"))
+        self._proxy = proxy
+        self._timeout = None
+
+    @property
+    def proxy(self) -> str:
+        """延迟获取代理配置"""
+        return self._proxy or get_config("network.base_proxy_url")
+
+    @property
+    def timeout(self) -> float:
+        """延迟获取超时配置"""
+        if self._timeout is not None:
+            return self._timeout
+        timeout_val = get_config("network.timeout")
+        return float(timeout_val) if timeout_val else DEFAULT_TIMEOUT
 
     def _build_proxies(self) -> Optional[dict]:
         """构建代理配置"""
