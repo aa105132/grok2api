@@ -461,7 +461,7 @@ class ChatService:
                 logger.debug(f"Processing image stream response: model={model}")
                 # 强制使用 url 格式以便处理
                 image_format = get_config("app.image_format")
-                processor = ImageWSStreamProcessor(model, token, response_format=image_format, only_completed=True)
+                processor = ImageWSStreamProcessor(model, token, response_format=image_format)
                 
                 async def chat_stream_wrapper():
                     # 先发送 role
@@ -506,9 +506,6 @@ class ChatService:
                                 elif url := data.get("url"):
                                     img_id = str(uuid.uuid4())[:8]
                                     content = f"![{img_id}]({url})\n"
-                                elif b64 := data.get("base64"):
-                                    img_id = str(uuid.uuid4())[:8]
-                                    content = f"![{img_id}](data:image/jpeg;base64,{b64})\n"
                                 
                                 if content:
                                     chunk = {

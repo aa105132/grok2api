@@ -102,7 +102,6 @@ class ImageWSStreamProcessor(ImageWSBaseProcessor):
         n: int = 1,
         response_format: str = "b64_json",
         size: str = "1024x1024",
-        only_completed: bool = False,
     ):
         super().__init__(model, token, response_format)
         self.n = n
@@ -110,7 +109,6 @@ class ImageWSStreamProcessor(ImageWSBaseProcessor):
         self._target_id: Optional[str] = None
         self._index_map: Dict[str, int] = {}
         self._partial_map: Dict[str, int] = {}
-        self._only_completed = only_completed
 
     def _assign_index(self, image_id: str) -> Optional[int]:
         if image_id in self._index_map:
@@ -160,7 +158,7 @@ class ImageWSStreamProcessor(ImageWSBaseProcessor):
             if index is None:
                 continue
 
-            if item.get("stage") != "final" and not self._only_completed:
+            if item.get("stage") != "final":
                 partial_b64 = self._strip_base64(item.get("blob", ""))
                 if not partial_b64:
                     continue
@@ -181,22 +179,17 @@ class ImageWSStreamProcessor(ImageWSBaseProcessor):
                 )
 
         if self.n == 1:
-            if self._target_id and self._target_id in images:
-                selected = [(self._target_id, images[self._target_id])]
-            else:
-                selected = (
-                    [
-                        max(
-                            images.items(),
-                            key=lambda x: (
-                                x[1].get("is_final", False),
-                                x[1].get("blob_size", 0),
-                            ),
-                        )
-                    ]
-                    if images
-                    else []
+            # n=1 时，从所有收到的图片中选出最好的（优先 is_final，其次 blob_size）
+            best_item = None
+            if images:
+                best_id, best_item = max(
+                    images.items(),
+                    key=lambda x: (
+                        x[1].get("is_final", False),
+                        x[1].get("blob_size", 0),
+                    ),
                 )
+            selected = [(best_id, best_item)] if best_item else []
         else:
             selected = [
                 (image_id, images[image_id])
@@ -213,22 +206,22 @@ class ImageWSStreamProcessor(ImageWSBaseProcessor):
                 index = 0
             else:
                 index = self._index_map.get(image_id, 0)
-            yield self._sse(
-                "image_generation.completed",
-                {
-                    "type": "image_generation.completed",
-                    self.response_field: output,
-                    "created_at": int(time.time()),
-                    "size": self.size,
-                    "index": index,
-                    "usage": {
-                        "total_tokens": 0,
-                        "input_tokens": 0,
-                        "output_tokens": 0,
-                        "input_tokens_details": {"text_tokens": 0, "image_tokens": 0},
-                    },
+            
+            res_data = {
+                "type": "image_generation.completed",
+                "created_at": int(time.time()),
+                "size": self.size,
+                "index": index,
+                "usage": {
+                    "total_tokens": 0,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "input_tokens_details": {"text_tokens": 0, "image_tokens": 0},
                 },
-            )
+            }
+            res_data[self.response_field] = output
+            
+            yield self._sse("image_generation.completed", res_data)
 
 
 class ImageWSCollectProcessor(ImageWSBaseProcessor):
@@ -239,7 +232,7 @@ class ImageWSCollectProcessor(ImageWSBaseProcessor):
     ):
         super().__init__(model, token, response_format)
         self.n = n
-
+    
     async def process(self, response: AsyncIterable[dict]) -> List[str]:
         images: Dict[str, Dict] = {}
 
