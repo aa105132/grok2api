@@ -2,18 +2,15 @@
 图片生成响应处理器（WebSocket）
 """
 
-import base64
 import time
-from pathlib import Path
 from typing import AsyncGenerator, AsyncIterable, List, Dict, Optional
 
 import orjson
 
 from app.core.config import get_config
 from app.core.logger import logger
-from app.core.storage import DATA_DIR
 from app.core.exceptions import UpstreamException
-from .base import BaseProcessor, ASSET_URL
+from .base import BaseProcessor
 
 
 class ImageWSBaseProcessor(BaseProcessor):
@@ -28,14 +25,6 @@ class ImageWSBaseProcessor(BaseProcessor):
             self.response_field = "base64"
         else:
             self.response_field = "b64_json"
-        self._image_dir: Optional[Path] = None
-
-    def _ensure_image_dir(self) -> Path:
-        if self._image_dir is None:
-            base_dir = DATA_DIR / "tmp" / "image"
-            base_dir.mkdir(parents=True, exist_ok=True)
-            self._image_dir = base_dir
-        return self._image_dir
 
     def _strip_base64(self, blob: str) -> str:
         if not blob:
@@ -43,27 +32,6 @@ class ImageWSBaseProcessor(BaseProcessor):
         if "," in blob and "base64" in blob.split(",", 1)[0]:
             return blob.split(",", 1)[1]
         return blob
-
-    def _filename(self, image_id: str, is_final: bool) -> str:
-        ext = "jpg" if is_final else "png"
-        return f"{image_id}.{ext}"
-
-    def _build_file_url(self, filename: str) -> str:
-        app_url = get_config("app.app_url")
-        if app_url:
-            return f"{app_url.rstrip('/')}/v1/files/image/{filename}"
-        return f"/v1/files/image/{filename}"
-
-    def _save_blob(self, image_id: str, blob: str, is_final: bool) -> str:
-        data = self._strip_base64(blob)
-        if not data:
-            return ""
-        image_dir = self._ensure_image_dir()
-        filename = self._filename(image_id, is_final)
-        filepath = image_dir / filename
-        with open(filepath, "wb") as f:
-            f.write(base64.b64decode(data))
-        return self._build_file_url(filename)
 
     def _pick_best(self, existing: Optional[Dict], incoming: Dict) -> Dict:
         if not existing:
@@ -141,22 +109,16 @@ class ImageWSBaseProcessor(BaseProcessor):
                 hd_b64 = await self._download_from_url(url, image_id)
                 if hd_b64:
                     if self.response_format == "url":
-                        return self._save_blob(image_id, hd_b64, True)
+                        # 直接返回 Grok 资源 URL，不保存本地
+                        return url if url.startswith("http") else f"https://assets.grok.com{url}"
                     return hd_b64
 
             if self.response_format == "url":
-                # 先尝试从 blob 保存
-                result = self._save_blob(
-                    image_id, blob, is_final
-                )
-                if result:
-                    return result
-                # blob 为空，尝试通过 URL 下载后保存
+                # URL 模式：直接返回 Grok 资源 URL，不保存本地
                 if url:
-                    logger.info(f"Blob empty for {image_id} (url mode), downloading from URL: {url[:80]}")
-                    b64 = await self._download_from_url(url, image_id)
-                    if b64:
-                        return self._save_blob(image_id, b64, is_final)
+                    return url if url.startswith("http") else f"https://assets.grok.com{url}"
+                # 如果没有 URL 但有 blob，无法提供 URL，返回空字符串
+                logger.warning(f"No URL available for image {image_id} in url mode")
                 return ""
 
             # b64_json / base64 模式：返回 base64 数据

@@ -4,8 +4,6 @@ Grok 文件资产服务
 
 import asyncio
 import base64
-import hashlib
-import os
 import re
 import time
 from contextlib import asynccontextmanager
@@ -19,7 +17,6 @@ try:
 except ImportError:
     fcntl = None
 
-import aiofiles
 from curl_cffi.requests import AsyncSession
 
 from app.core.config import get_config
@@ -491,281 +488,51 @@ class DeleteService(BaseService):
 
 
 class DownloadService(BaseService):
-    """文件下载服务"""
+    """文件下载服务（仅用于下载并转换为 base64）"""
 
     def __init__(self, proxy: Optional[str] = None):
         super().__init__(proxy)
-        self.base_dir = DATA_DIR / "tmp"
-        self.image_dir = self.base_dir / "image"
-        self.video_dir = self.base_dir / "video"
-        self.image_dir.mkdir(parents=True, exist_ok=True)
-        self.video_dir.mkdir(parents=True, exist_ok=True)
-        self._cleanup_running = False
-
-    def _cache_path(self, file_path: str, media_type: str) -> Path:
-        """获取缓存路径"""
-        cache_dir = self.image_dir if media_type == "image" else self.video_dir
-        filename = file_path.lstrip("/").replace("/", "-")
-        return cache_dir / filename
-
-    def _get_mime(self, cache_path: Path, response=None) -> str:
-        """获取 MIME 类型"""
-        if response:
-            return response.headers.get(
-                "content-type", "application/octet-stream"
-            ).split(";")[0]
-        return MIME_TYPES.get(cache_path.suffix.lower(), "application/octet-stream")
-
-    async def download(
-        self, file_path: str, token: str, media_type: str = "image"
-    ) -> Tuple[Optional[Path], str]:
-        """下载文件到本地"""
-        async with _get_assets_semaphore():
-            cache_path = self._cache_path(file_path, media_type)
-
-            # 检查缓存
-            if cache_path.exists():
-                logger.debug(f"Cache hit: {cache_path}")
-                return cache_path, self._get_mime(cache_path)
-
-            # 文件锁防止并发下载
-            lock_name = f"dl_{media_type}_{hashlib.sha1(str(cache_path).encode()).hexdigest()[:16]}"
-            async with _file_lock(lock_name, timeout=10):
-                # 双重检查
-                if cache_path.exists():
-                    return cache_path, self._get_mime(cache_path)
-
-                # 执行下载
-                mime = await self._download_file(file_path, token, cache_path)
-                logger.info(f"Downloaded: {file_path}")
-
-                # 异步检查缓存限制
-                asyncio.create_task(self.check_limit())
-
-                return cache_path, mime
-
-    async def _download_file(self, file_path: str, token: str, cache_path: Path) -> str:
-        """执行下载"""
-        if not file_path.startswith("/"):
-            file_path = f"/{file_path}"
-
-        url = f"{DOWNLOAD_API}{file_path}"
-        headers = self._build_headers(token, download=True)
-
-        session = await self._get_session()
-        response = await session.get(
-            url,
-            headers=headers,
-            proxies=self.config.get_proxies(),
-            timeout=self.config.timeout,
-            allow_redirects=True,
-            impersonate=self.config.browser,
-            stream=True,
-        )
-
-        if response.status_code != 200:
-            raise UpstreamException(
-                message=f"Download failed: {response.status_code}",
-                details={"path": file_path, "status": response.status_code},
-            )
-
-        # 保存文件
-        tmp_path = cache_path.with_suffix(cache_path.suffix + ".tmp")
-        try:
-            async with aiofiles.open(tmp_path, "wb") as f:
-                # 尝试流式写入
-                if hasattr(response, "aiter_content"):
-                    async for chunk in response.aiter_content():
-                        if chunk:
-                            await f.write(chunk)
-                else:
-                    await f.write(response.content)
-            os.replace(tmp_path, cache_path)
-        finally:
-            if tmp_path.exists() and not cache_path.exists():
-                try:
-                    tmp_path.unlink()
-                except Exception:
-                    pass
-
-        return self._get_mime(cache_path, response)
 
     async def to_base64(
         self, file_path: str, token: str, media_type: str = "image"
     ) -> str:
-        """下载并转 base64"""
+        """直接下载并转 base64，不保存到本地"""
         try:
-            cache_path, mime = await self.download(file_path, token, media_type)
-            if not cache_path or not cache_path.exists():
-                logger.warning(f"Download failed for {file_path}: invalid path")
-                raise AppException(
-                    "Download failed: invalid path", code="download_failed"
+            if not file_path.startswith("/"):
+                file_path = f"/{file_path}"
+
+            url = f"{DOWNLOAD_API}{file_path}"
+            headers = self._build_headers(token, download=True)
+
+            async with _get_assets_semaphore():
+                session = await self._get_session()
+                response = await session.get(
+                    url,
+                    headers=headers,
+                    proxies=self.config.get_proxies(),
+                    timeout=self.config.timeout,
+                    allow_redirects=True,
+                    impersonate=self.config.browser,
                 )
 
-            data_uri = self.to_b64(cache_path, mime)
+                if response.status_code != 200:
+                    raise UpstreamException(
+                        message=f"Download failed: {response.status_code}",
+                        details={"path": file_path, "status": response.status_code},
+                    )
 
-            # 删除临时文件
-            if data_uri:
-                try:
-                    cache_path.unlink()
-                except Exception as e:
-                    logger.debug(f"Failed to cleanup temp file {cache_path}: {e}")
+                # 直接转换为 base64，不保存到本地
+                content = response.content
+                mime = response.headers.get(
+                    "content-type", "application/octet-stream"
+                ).split(";")[0]
+                b64 = base64.b64encode(content).decode()
 
-            return data_uri
+                logger.debug(f"Downloaded and converted to base64: {file_path}")
+                return f"data:{mime};base64,{b64}"
         except Exception as e:
             logger.error(f"Failed to convert {file_path} to base64: {e}")
             raise
-
-    def get_stats(self, media_type: str = "image") -> Dict[str, Any]:
-        """获取缓存统计"""
-        cache_dir = self.image_dir if media_type == "image" else self.video_dir
-        if not cache_dir.exists():
-            return {"count": 0, "size_mb": 0.0}
-
-        allowed = IMAGE_EXTS if media_type == "image" else VIDEO_EXTS
-        files = [
-            f
-            for f in cache_dir.glob("*")
-            if f.is_file() and f.suffix.lower() in allowed
-        ]
-        total_size = sum(f.stat().st_size for f in files)
-        return {"count": len(files), "size_mb": round(total_size / 1024 / 1024, 2)}
-
-    def list_files(
-        self, media_type: str = "image", page: int = 1, page_size: int = 1000
-    ) -> Dict[str, Any]:
-        """列出缓存文件"""
-        cache_dir = self.image_dir if media_type == "image" else self.video_dir
-        if not cache_dir.exists():
-            return {"total": 0, "page": page, "page_size": page_size, "items": []}
-
-        allowed = IMAGE_EXTS if media_type == "image" else VIDEO_EXTS
-        files = [
-            f
-            for f in cache_dir.glob("*")
-            if f.is_file() and f.suffix.lower() in allowed
-        ]
-
-        # 构建文件列表
-        items = []
-        for f in files:
-            try:
-                stat = f.stat()
-                items.append(
-                    {
-                        "name": f.name,
-                        "size_bytes": stat.st_size,
-                        "mtime_ms": int(stat.st_mtime * 1000),
-                    }
-                )
-            except Exception:
-                continue
-
-        items.sort(key=lambda x: x["mtime_ms"], reverse=True)
-
-        # 分页
-        total = len(items)
-        start = max(0, (page - 1) * page_size)
-        paged = items[start : start + page_size]
-
-        # 添加 URL
-        for item in paged:
-            item["view_url"] = f"/v1/files/{media_type}/{item['name']}"
-
-        return {"total": total, "page": page, "page_size": page_size, "items": paged}
-
-    def delete_file(self, media_type: str, name: str) -> Dict[str, Any]:
-        """删除缓存文件"""
-        cache_dir = self.image_dir if media_type == "image" else self.video_dir
-        file_path = cache_dir / name.replace("/", "-")
-
-        if file_path.exists():
-            try:
-                file_path.unlink()
-                return {"deleted": True}
-            except Exception:
-                pass
-        return {"deleted": False}
-
-    def clear(self, media_type: str = "image") -> Dict[str, Any]:
-        """清空缓存"""
-        cache_dir = self.image_dir if media_type == "image" else self.video_dir
-        if not cache_dir.exists():
-            return {"count": 0, "size_mb": 0.0}
-
-        files = list(cache_dir.glob("*"))
-        total_size = sum(f.stat().st_size for f in files if f.is_file())
-        count = 0
-
-        for f in files:
-            if f.is_file():
-                try:
-                    f.unlink()
-                    count += 1
-                except Exception:
-                    pass
-
-        return {"count": count, "size_mb": round(total_size / 1024 / 1024, 2)}
-
-    async def check_limit(self):
-        """检查并清理缓存"""
-        if self._cleanup_running or not get_config("cache.enable_auto_clean"):
-            return
-
-        self._cleanup_running = True
-        try:
-            async with _file_lock("cache_cleanup", timeout=5):
-                limit_mb = get_config("cache.limit_mb")
-                all_files, total_size = self._collect_files()
-                current_mb = total_size / 1024 / 1024
-
-                if current_mb <= limit_mb:
-                    return
-
-                # 清理到 80%
-                logger.info(
-                    f"Cache limit exceeded ({current_mb:.2f}MB > {limit_mb}MB), cleaning..."
-                )
-                all_files.sort(key=lambda x: x[1])  # 按时间排序
-
-                deleted_count = 0
-                deleted_size = 0
-                target_mb = limit_mb * 0.8
-
-                for f, _, size in all_files:
-                    try:
-                        f.unlink()
-                        deleted_count += 1
-                        deleted_size += size
-                        total_size -= size
-                        if (total_size / 1024 / 1024) <= target_mb:
-                            break
-                    except Exception:
-                        pass
-
-                logger.info(
-                    f"Cache cleanup: {deleted_count} files ({deleted_size / 1024 / 1024:.2f}MB)"
-                )
-        finally:
-            self._cleanup_running = False
-
-    def _collect_files(self) -> Tuple[List[Tuple[Path, float, int]], int]:
-        """收集所有缓存文件"""
-        total_size = 0
-        all_files = []
-
-        for d in [self.image_dir, self.video_dir]:
-            if d.exists():
-                for f in d.glob("*"):
-                    if f.is_file():
-                        try:
-                            stat = f.stat()
-                            total_size += stat.st_size
-                            all_files.append((f, stat.st_mtime, stat.st_size))
-                        except Exception:
-                            pass
-
-        return all_files, total_size
 
 
 __all__ = [

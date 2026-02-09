@@ -133,7 +133,7 @@ class BaseProcessor:
             self._dl_service = None
 
     async def process_url(self, path: str, media_type: str = "image") -> str:
-        """处理资产 URL"""
+        """处理资产 URL，直接返回 Grok 资源 URL"""
         if path.startswith("http"):
             from urllib.parse import urlparse
 
@@ -142,12 +142,8 @@ class BaseProcessor:
         if not path.startswith("/"):
             path = f"/{path}"
 
-        if self.app_url:
-            dl_service = self._get_dl()
-            await dl_service.download(path, self.token, media_type)
-            return f"{self.app_url.rstrip('/')}/v1/files/{media_type}{path}"
-        else:
-            return f"{ASSET_URL.rstrip('/')}{path}"
+        # 直接返回 Grok 资源 URL，不保存本地
+        return f"{ASSET_URL.rstrip('/')}{path}"
 
 
 __all__ = [
