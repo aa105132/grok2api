@@ -4,25 +4,35 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Grok2API - Imagine 瀑布流</title>
+  <title>Grok2API - Imagine</title>
   <link rel="icon" href="/static/favicon/favicon.ico">
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://cdn.jsdelivr.net/npm/geist@1.0.0/dist/fonts/geist-sans/style.css" rel="stylesheet">
   <link href="https://cdn.jsdelivr.net/npm/geist@1.0.0/dist/fonts/geist-mono/style.css" rel="stylesheet">
   <link href="/static/common/common.css?v=3" rel="stylesheet">
-  <link href="/static/imagine/imagine.css?v=4" rel="stylesheet">
+  <link href="/static/imagine/imagine.css?v=5" rel="stylesheet">
   <link href="/static/common/toast.css" rel="stylesheet">
 </head>
 
 <body class="min-h-screen flex flex-col" style="background-color: var(--bg);">
   <div id="toast-container" class="toast-container"></div>
-  <div id="app-header"></div>
+
+  <!-- 简化的公开版 Header -->
+  <header class="public-header">
+    <div class="header-content">
+      <a href="/imagine" class="header-logo">
+        <span class="logo-text">Grok2API</span>
+        <span class="logo-badge">Imagine</span>
+      </a>
+      <a href="/admin" class="admin-link">管理后台</a>
+    </div>
+  </header>
 
   <main class="flex-1 container mx-auto max-w-5xl px-6 py-8 fade-in">
     <div class="space-y-6">
         <div>
-          <h2 class="text-2xl font-semibold tracking-tight">Imagine 瀑布流</h2>
-          <p class="text-[var(--accents-4)] mt-1 text-sm">通过 WebSocket 持续生成图片，实时展示 base64 瀑布流。</p>
+          <h2 class="text-2xl font-semibold tracking-tight">AI 图片生成</h2>
+          <p class="text-[var(--accents-4)] mt-1 text-sm">输入提示词，持续生成高质量图片。支持文生图和图生图模式。</p>
         </div>
 
         <div class="h-px bg-[var(--border)]"></div>
@@ -85,7 +95,7 @@
                   </div>
                 </div>
               </div>
-              
+
               <div class="settings-bottom-row">
                 <div class="settings-toggles">
                   <div class="settings-toggle">
@@ -221,14 +231,18 @@
     </div>
   </div>
 
-  <div id="app-footer"></div>
+  <!-- 简化的 Footer -->
+  <footer class="public-footer">
+    <div class="footer-content">
+      <span>Powered by Grok2API</span>
+      <span class="footer-sep">|</span>
+      <a href="/admin" class="footer-link">管理后台</a>
+    </div>
+  </footer>
 
-  <script src="/static/common/admin-auth.js?v=2"></script>
-  <script src="/static/common/header.js?v=4"></script>
-  <script src="/static/common/footer.js?v=1"></script>
   <script src="/static/common/toast.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-  <script src="/static/imagine/imagine.js?v=9"></script>
+  <script src="/static/imagine/public.js?v=2"></script>
 </body>
 
 </html>

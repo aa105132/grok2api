@@ -218,15 +218,27 @@ async def cancel_batch(task_id: str):
     return {"status": "success"}
 
 
+@router.get("/", include_in_schema=False)
+async def root_redirect():
+    return RedirectResponse(url="/imagine")
+
+
+@router.get("/imagine", response_class=HTMLResponse, include_in_schema=False)
+async def public_imagine_page():
+    """公开的 Imagine 图片瀑布流（不需要登录）"""
+    return await render_template("imagine/public.html")
+
+
 @router.get("/admin", response_class=HTMLResponse, include_in_schema=False)
 async def admin_login_page():
     """管理后台登录页"""
     return await render_template("login/login.html")
 
 
-@router.get("/", include_in_schema=False)
-async def root_redirect():
-    return RedirectResponse(url="/admin")
+@router.get("/admin/imagine", response_class=HTMLResponse, include_in_schema=False)
+async def admin_imagine_page():
+    """Imagine 图片瀑布流（管理后台版本）"""
+    return await render_template("imagine/imagine.html")
 
 
 @router.get("/admin/config", response_class=HTMLResponse, include_in_schema=False)
@@ -245,12 +257,6 @@ async def admin_token_page():
 async def admin_voice_page():
     """Voice Live 调试页"""
     return await render_template("voice/voice.html")
-
-
-@router.get("/admin/imagine", response_class=HTMLResponse, include_in_schema=False)
-async def admin_imagine_page():
-    """Imagine 图片瀑布流"""
-    return await render_template("imagine/imagine.html")
 
 
 class VoiceTokenResponse(BaseModel):
@@ -364,11 +370,19 @@ async def admin_imagine_ws(websocket: WebSocket):
 
     async def _run(prompt: str, aspect_ratio: str, mode: str = "generate", ref_images: Optional[List[str]] = None):
         # 根据模式选择模型
-        if mode == "edit" and ref_images:
+        if mode == "edit":
+            if not ref_images:
+                await _send(
+                    {
+                        "type": "error",
+                        "message": "Edit mode requires at least one image.",
+                        "code": "missing_image",
+                    }
+                )
+                return
             model_id = "grok-imagine-1.0-edit"
         else:
             model_id = "grok-imagine-1.0"
-            mode = "generate"  # 强制为 generate 模式
 
         model_info = ModelService.get(model_id)
         if not model_info:
@@ -394,13 +408,15 @@ async def admin_imagine_ws(websocket: WebSocket):
                 "aspect_ratio": aspect_ratio,
                 "mode": mode,
                 "run_id": run_id,
+                "model": model_id,
+                "upstream_transport": "chat_sse" if mode == "edit" else "ws",
             }
         )
 
         # 图生图模式：预先上传图片
         image_urls = []
         parent_post_id = None
-        if mode == "edit" and ref_images:
+        if mode == "edit":
             try:
                 await token_mgr.reload_if_stale()
                 token = None
@@ -629,7 +645,11 @@ async def admin_imagine_ws(websocket: WebSocket):
 
             msg_type = payload.get("type")
             if msg_type == "start":
+                session = await _get_imagine_session(session_id) if session_id else None
+
                 prompt = str(payload.get("prompt") or "").strip()
+                if not prompt and session:
+                    prompt = str(session.get("prompt") or "").strip()
                 if not prompt:
                     await _send(
                         {
@@ -639,16 +659,28 @@ async def admin_imagine_ws(websocket: WebSocket):
                         }
                     )
                     continue
-                ratio = str(payload.get("aspect_ratio") or "2:3").strip()
+                ratio = str(
+                    payload.get("aspect_ratio")
+                    or (session.get("aspect_ratio") if session else "2:3")
+                    or "2:3"
+                ).strip()
                 if not ratio:
                     ratio = "2:3"
                 ratio = resolve_aspect_ratio(ratio)
-                mode = str(payload.get("mode") or "generate").strip()
+                mode = str(
+                    payload.get("mode")
+                    or (session.get("mode") if session else "generate")
+                    or "generate"
+                ).strip()
                 if mode not in ("generate", "edit"):
                     mode = "generate"
                 ref_images = payload.get("images") or []
                 if not isinstance(ref_images, list):
                     ref_images = []
+                if mode == "edit" and not ref_images and session:
+                    ref_images = session.get("images") or []
+                    if not isinstance(ref_images, list):
+                        ref_images = []
                 await _stop_run()
                 stop_event.clear()
                 run_task = asyncio.create_task(_run(prompt, ratio, mode, ref_images if mode == "edit" else None))
@@ -699,7 +731,11 @@ async def admin_imagine_start(data: ImagineStartRequest):
         mode = "generate"
 
     images = []
-    if mode == "edit" and data.images:
+    if mode == "edit":
+        if not data.images:
+            raise HTTPException(
+                status_code=400, detail="Edit mode requires at least one image"
+            )
         # Validate and store images
         for img in data.images[:4]:  # Max 4 images
             if img and isinstance(img, str):
@@ -710,7 +746,9 @@ async def admin_imagine_start(data: ImagineStartRequest):
                     # Assume it's raw base64, add data URL prefix
                     images.append(f"data:image/jpeg;base64,{img}")
         if not images:
-            raise HTTPException(status_code=400, detail="Edit mode requires at least one image")
+            raise HTTPException(
+                status_code=400, detail="Edit mode requires at least one image"
+            )
 
     task_id = await _create_imagine_session(prompt, ratio, mode, images)
     return {"task_id": task_id, "aspect_ratio": ratio, "mode": mode}
@@ -724,6 +762,493 @@ class ImagineStopRequest(BaseModel):
 async def admin_imagine_stop(data: ImagineStopRequest):
     removed = await _delete_imagine_sessions(data.task_ids or [])
     return {"status": "success", "removed": removed}
+
+
+# ==================== 公开 API（无需认证） ====================
+
+@router.post("/api/v1/imagine/start")
+async def public_imagine_start(data: ImagineStartRequest):
+    """公开的 Imagine 任务创建接口（无需认证）"""
+    prompt = (data.prompt or "").strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Prompt cannot be empty")
+    ratio = resolve_aspect_ratio(str(data.aspect_ratio or "2:3").strip() or "2:3")
+    mode = data.mode or "generate"
+    if mode not in ("generate", "edit"):
+        mode = "generate"
+
+    images = []
+    if mode == "edit":
+        if not data.images:
+            raise HTTPException(
+                status_code=400, detail="Edit mode requires at least one image"
+            )
+        for img in data.images[:4]:
+            if img and isinstance(img, str):
+                if img.startswith("data:"):
+                    images.append(img)
+                else:
+                    images.append(f"data:image/jpeg;base64,{img}")
+        if not images:
+            raise HTTPException(
+                status_code=400, detail="Edit mode requires at least one image"
+            )
+
+    task_id = await _create_imagine_session(prompt, ratio, mode, images)
+    return {"task_id": task_id, "aspect_ratio": ratio, "mode": mode}
+
+
+@router.post("/api/v1/imagine/stop")
+async def public_imagine_stop(data: ImagineStopRequest):
+    """公开的 Imagine 任务停止接口（无需认证）"""
+    removed = await _delete_imagine_sessions(data.task_ids or [])
+    return {"status": "success", "removed": removed}
+
+
+@router.websocket("/api/v1/imagine/ws")
+async def public_imagine_ws(websocket: WebSocket):
+    """公开的 Imagine WebSocket 接口（无需认证）"""
+    task_id = websocket.query_params.get("task_id")
+    session_id = None
+    if task_id:
+        info = await _get_imagine_session(task_id)
+        if info:
+            session_id = task_id
+
+    await websocket.accept()
+    stop_event = asyncio.Event()
+    run_task: Optional[asyncio.Task] = None
+
+    async def _send(payload: dict) -> bool:
+        try:
+            await websocket.send_text(orjson.dumps(payload).decode())
+            return True
+        except Exception:
+            return False
+
+    async def _stop_run():
+        nonlocal run_task
+        stop_event.set()
+        if run_task and not run_task.done():
+            run_task.cancel()
+            try:
+                await run_task
+            except Exception:
+                pass
+        run_task = None
+        stop_event.clear()
+
+    async def _run(prompt: str, aspect_ratio: str, mode: str = "generate", ref_images: Optional[List[str]] = None):
+        if mode == "edit":
+            if not ref_images:
+                await _send({"type": "error", "message": "Edit mode requires at least one image.", "code": "missing_image"})
+                return
+            model_id = "grok-imagine-1.0-edit"
+        else:
+            model_id = "grok-imagine-1.0"
+
+        model_info = ModelService.get(model_id)
+        if not model_info:
+            await _send({"type": "error", "message": f"Model {model_id} is not available.", "code": "model_not_supported"})
+            return
+
+        token_mgr = await get_token_manager()
+        enable_nsfw = bool(get_config("image.image_ws_nsfw", True))
+        sequence = 0
+        run_id = uuid.uuid4().hex
+
+        await _send(
+            {
+                "type": "status",
+                "status": "running",
+                "prompt": prompt,
+                "aspect_ratio": aspect_ratio,
+                "mode": mode,
+                "run_id": run_id,
+                "model": model_id,
+                "upstream_transport": "chat_sse" if mode == "edit" else "ws",
+            }
+        )
+
+        image_urls = []
+        parent_post_id = None
+        if mode == "edit":
+            try:
+                await token_mgr.reload_if_stale()
+                token = None
+                for pool_name in ModelService.pool_candidates_for_model(model_id):
+                    token = token_mgr.get_token(pool_name)
+                    if token:
+                        break
+                if not token:
+                    await _send({"type": "error", "message": "No available tokens.", "code": "rate_limit_exceeded"})
+                    return
+
+                upload_service = UploadService()
+                try:
+                    for img_data in ref_images:
+                        file_id, file_uri = await upload_service.upload(img_data, token)
+                        if file_uri:
+                            if file_uri.startswith("http"):
+                                image_urls.append(file_uri)
+                            else:
+                                image_urls.append(f"https://assets.grok.com/{file_uri.lstrip('/')}")
+                finally:
+                    await upload_service.close()
+
+                if not image_urls:
+                    await _send({"type": "error", "message": "Failed to upload images.", "code": "upload_failed"})
+                    return
+
+                try:
+                    media_service = VideoService()
+                    parent_post_id = await media_service.create_image_post(token, image_urls[0])
+                except Exception as e:
+                    logger.warning(f"Create image post failed: {e}")
+
+                if not parent_post_id:
+                    for url in image_urls:
+                        match = re.search(r"/generated/([a-f0-9-]+)/", url)
+                        if match:
+                            parent_post_id = match.group(1)
+                            break
+                        match = re.search(r"/users/[^/]+/([a-f0-9-]+)/content", url)
+                        if match:
+                            parent_post_id = match.group(1)
+                            break
+            except Exception as e:
+                logger.error(f"Image upload failed: {e}")
+                await _send({"type": "error", "message": f"Upload failed: {str(e)}", "code": "upload_failed"})
+                return
+
+        while not stop_event.is_set():
+            try:
+                await token_mgr.reload_if_stale()
+                token = None
+                for pool_name in ModelService.pool_candidates_for_model(model_id):
+                    token = token_mgr.get_token(pool_name)
+                    if token:
+                        break
+
+                if not token:
+                    await _send({"type": "error", "message": "No available tokens.", "code": "rate_limit_exceeded"})
+                    await asyncio.sleep(2)
+                    continue
+
+                start_at = time.time()
+
+                if mode == "edit" and image_urls:
+                    model_config_override = {"modelMap": {"imageEditModel": "imagine", "imageEditModelConfig": {"imageReferences": image_urls}}}
+                    if parent_post_id:
+                        model_config_override["modelMap"]["imageEditModelConfig"]["parentPostId"] = parent_post_id
+
+                    raw_payload = {
+                        "temporary": bool(get_config("chat.temporary")),
+                        "modelName": model_info.grok_model,
+                        "message": prompt,
+                        "enableImageGeneration": True,
+                        "returnImageBytes": False,
+                        "enableImageStreaming": True,
+                        "imageGenerationCount": 2,
+                        "toolOverrides": {"imageGen": True},
+                        "enableSideBySide": True,
+                        "sendFinalMetadata": True,
+                        "disableTextFollowUps": True,
+                        "responseMetadata": {"modelConfigOverride": model_config_override},
+                    }
+
+                    chat_service = GrokChatService()
+                    response = await chat_service.chat(token=token, message=prompt, model=model_info.grok_model, mode=None, stream=True, raw_payload=raw_payload)
+                    processor = ImageCollectProcessor(model_info.model_id, token, response_format="b64_json")
+                    images = await processor.process(response)
+                else:
+                    upstream = image_service.stream(token=token, prompt=prompt, aspect_ratio=aspect_ratio, n=6, enable_nsfw=enable_nsfw)
+                    processor = ImageWSCollectProcessor(model_info.model_id, token, n=6, response_format="b64_json")
+                    images = await processor.process(upstream)
+
+                elapsed_ms = int((time.time() - start_at) * 1000)
+
+                if images and all(img and img != "error" for img in images):
+                    for img_b64 in images:
+                        sequence += 1
+                        await _send({"type": "image", "b64_json": img_b64, "sequence": sequence, "created_at": int(time.time() * 1000), "elapsed_ms": elapsed_ms, "aspect_ratio": aspect_ratio, "mode": mode, "run_id": run_id})
+
+                    try:
+                        effort = EffortType.HIGH if (model_info and model_info.cost.value == "high") else EffortType.LOW
+                        await token_mgr.consume(token, effort)
+                    except Exception as e:
+                        logger.warning(f"Failed to consume token: {e}")
+                else:
+                    await _send({"type": "error", "message": "Empty image data.", "code": "empty_image"})
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning(f"Imagine stream error: {e}")
+                await _send({"type": "error", "message": str(e), "code": "internal_error"})
+                await asyncio.sleep(1.5)
+
+        await _send({"type": "status", "status": "stopped", "run_id": run_id})
+
+    try:
+        while True:
+            try:
+                raw = await websocket.receive_text()
+            except (RuntimeError, WebSocketDisconnect):
+                break
+
+            try:
+                payload = orjson.loads(raw)
+            except Exception:
+                await _send({"type": "error", "message": "Invalid message format.", "code": "invalid_payload"})
+                continue
+
+            msg_type = payload.get("type")
+            if msg_type == "start":
+                session = await _get_imagine_session(session_id) if session_id else None
+
+                prompt = str(payload.get("prompt") or "").strip()
+                if not prompt and session:
+                    prompt = str(session.get("prompt") or "").strip()
+                if not prompt:
+                    await _send({"type": "error", "message": "Prompt cannot be empty.", "code": "empty_prompt"})
+                    continue
+                ratio = resolve_aspect_ratio(
+                    str(
+                        payload.get("aspect_ratio")
+                        or (session.get("aspect_ratio") if session else "2:3")
+                        or "2:3"
+                    ).strip()
+                    or "2:3"
+                )
+                mode = str(
+                    payload.get("mode")
+                    or (session.get("mode") if session else "generate")
+                    or "generate"
+                ).strip()
+                if mode not in ("generate", "edit"):
+                    mode = "generate"
+                ref_images = payload.get("images") or []
+                if not isinstance(ref_images, list):
+                    ref_images = []
+                if mode == "edit" and not ref_images and session:
+                    ref_images = session.get("images") or []
+                    if not isinstance(ref_images, list):
+                        ref_images = []
+                await _stop_run()
+                stop_event.clear()
+                run_task = asyncio.create_task(_run(prompt, ratio, mode, ref_images if mode == "edit" else None))
+            elif msg_type == "stop":
+                await _stop_run()
+            elif msg_type == "ping":
+                await _send({"type": "pong"})
+            else:
+                await _send({"type": "error", "message": "Unknown command.", "code": "unknown_command"})
+    except WebSocketDisconnect:
+        logger.debug("WebSocket disconnected")
+    except Exception as e:
+        logger.warning(f"WebSocket error: {e}")
+    finally:
+        await _stop_run()
+        try:
+            from starlette.websockets import WebSocketState
+            if websocket.client_state == WebSocketState.CONNECTED:
+                await websocket.close(code=1000)
+        except Exception:
+            pass
+        if session_id:
+            await _delete_imagine_session(session_id)
+
+
+@router.get("/api/v1/imagine/sse")
+async def public_imagine_sse(
+    request: Request,
+    task_id: str = Query(""),
+    prompt: str = Query(""),
+    aspect_ratio: str = Query("2:3"),
+):
+    """公开的 Imagine SSE 接口（无需认证）"""
+    session = None
+    mode = "generate"
+    ref_images = []
+    if task_id:
+        session = await _get_imagine_session(task_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+    if session:
+        prompt = str(session.get("prompt") or "").strip()
+        ratio = str(session.get("aspect_ratio") or "2:3").strip() or "2:3"
+        mode = str(session.get("mode") or "generate").strip()
+        ref_images = session.get("images") or []
+    else:
+        prompt = (prompt or "").strip()
+        if not prompt:
+            raise HTTPException(status_code=400, detail="Prompt cannot be empty")
+        ratio = resolve_aspect_ratio(str(aspect_ratio or "2:3").strip() or "2:3")
+
+    async def event_stream():
+        nonlocal mode, ref_images
+        try:
+            if mode == "edit":
+                if not ref_images:
+                    yield _sse_event({"type": "error", "message": "Edit mode requires at least one image.", "code": "missing_image"})
+                    return
+                model_id = "grok-imagine-1.0-edit"
+            else:
+                model_id = "grok-imagine-1.0"
+
+            model_info = ModelService.get(model_id)
+            if not model_info:
+                yield _sse_event({"type": "error", "message": f"Model {model_id} not available.", "code": "model_not_supported"})
+                return
+
+            token_mgr = await get_token_manager()
+            enable_nsfw = bool(get_config("image.image_ws_nsfw", True))
+            sequence = 0
+            run_id = uuid.uuid4().hex
+
+            yield _sse_event(
+                {
+                    "type": "status",
+                    "status": "running",
+                    "prompt": prompt,
+                    "aspect_ratio": ratio,
+                    "mode": mode,
+                    "run_id": run_id,
+                    "model": model_id,
+                    "upstream_transport": "chat_sse" if mode == "edit" else "ws",
+                }
+            )
+
+            image_urls = []
+            parent_post_id = None
+            if mode == "edit":
+                try:
+                    await token_mgr.reload_if_stale()
+                    token = None
+                    for pool_name in ModelService.pool_candidates_for_model(model_id):
+                        token = token_mgr.get_token(pool_name)
+                        if token:
+                            break
+                    if not token:
+                        yield _sse_event({"type": "error", "message": "No available tokens.", "code": "rate_limit_exceeded"})
+                        return
+
+                    upload_service = UploadService()
+                    try:
+                        for img_data in ref_images:
+                            file_id, file_uri = await upload_service.upload(img_data, token)
+                            if file_uri:
+                                if file_uri.startswith("http"):
+                                    image_urls.append(file_uri)
+                                else:
+                                    image_urls.append(f"https://assets.grok.com/{file_uri.lstrip('/')}")
+                    finally:
+                        await upload_service.close()
+
+                    if not image_urls:
+                        yield _sse_event({"type": "error", "message": "Failed to upload images.", "code": "upload_failed"})
+                        return
+
+                    try:
+                        media_service = VideoService()
+                        parent_post_id = await media_service.create_image_post(token, image_urls[0])
+                    except Exception:
+                        pass
+
+                    if not parent_post_id:
+                        for url in image_urls:
+                            match = re.search(r"/generated/([a-f0-9-]+)/", url)
+                            if match:
+                                parent_post_id = match.group(1)
+                                break
+                            match = re.search(r"/users/[^/]+/([a-f0-9-]+)/content", url)
+                            if match:
+                                parent_post_id = match.group(1)
+                                break
+                except Exception as e:
+                    yield _sse_event({"type": "error", "message": f"Upload failed: {str(e)}", "code": "upload_failed"})
+                    return
+
+            while True:
+                if await request.is_disconnected():
+                    break
+                if task_id:
+                    session_alive = await _get_imagine_session(task_id)
+                    if not session_alive:
+                        break
+
+                try:
+                    await token_mgr.reload_if_stale()
+                    token = None
+                    for pool_name in ModelService.pool_candidates_for_model(model_id):
+                        token = token_mgr.get_token(pool_name)
+                        if token:
+                            break
+
+                    if not token:
+                        yield _sse_event({"type": "error", "message": "No available tokens.", "code": "rate_limit_exceeded"})
+                        await asyncio.sleep(2)
+                        continue
+
+                    start_at = time.time()
+
+                    if mode == "edit" and image_urls:
+                        model_config_override = {"modelMap": {"imageEditModel": "imagine", "imageEditModelConfig": {"imageReferences": image_urls}}}
+                        if parent_post_id:
+                            model_config_override["modelMap"]["imageEditModelConfig"]["parentPostId"] = parent_post_id
+
+                        raw_payload = {
+                            "temporary": bool(get_config("chat.temporary")),
+                            "modelName": model_info.grok_model,
+                            "message": prompt,
+                            "enableImageGeneration": True,
+                            "returnImageBytes": False,
+                            "enableImageStreaming": True,
+                            "imageGenerationCount": 2,
+                            "toolOverrides": {"imageGen": True},
+                            "enableSideBySide": True,
+                            "sendFinalMetadata": True,
+                            "disableTextFollowUps": True,
+                            "responseMetadata": {"modelConfigOverride": model_config_override},
+                        }
+
+                        chat_service = GrokChatService()
+                        response = await chat_service.chat(token=token, message=prompt, model=model_info.grok_model, mode=None, stream=True, raw_payload=raw_payload)
+                        processor = ImageCollectProcessor(model_info.model_id, token, response_format="b64_json")
+                        images = await processor.process(response)
+                    else:
+                        upstream = image_service.stream(token=token, prompt=prompt, aspect_ratio=ratio, n=6, enable_nsfw=enable_nsfw)
+                        processor = ImageWSCollectProcessor(model_info.model_id, token, n=6, response_format="b64_json")
+                        images = await processor.process(upstream)
+
+                    elapsed_ms = int((time.time() - start_at) * 1000)
+
+                    if images and all(img and img != "error" for img in images):
+                        for img_b64 in images:
+                            sequence += 1
+                            yield _sse_event({"type": "image", "b64_json": img_b64, "sequence": sequence, "created_at": int(time.time() * 1000), "elapsed_ms": elapsed_ms, "aspect_ratio": ratio, "mode": mode, "run_id": run_id})
+
+                        try:
+                            effort = EffortType.HIGH if (model_info and model_info.cost.value == "high") else EffortType.LOW
+                            await token_mgr.consume(token, effort)
+                        except Exception:
+                            pass
+                    else:
+                        yield _sse_event({"type": "error", "message": "Empty image data.", "code": "empty_image"})
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    yield _sse_event({"type": "error", "message": str(e), "code": "internal_error"})
+                    await asyncio.sleep(1.5)
+
+            yield _sse_event({"type": "status", "status": "stopped", "run_id": run_id})
+        finally:
+            if task_id:
+                await _delete_imagine_session(task_id)
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "Connection": "keep-alive"})
 
 
 @router.get("/api/v1/admin/imagine/sse")
@@ -760,11 +1285,19 @@ async def admin_imagine_sse(
         nonlocal mode, ref_images
         try:
             # 根据模式选择模型
-            if mode == "edit" and ref_images:
+            if mode == "edit":
+                if not ref_images:
+                    yield _sse_event(
+                        {
+                            "type": "error",
+                            "message": "Edit mode requires at least one image.",
+                            "code": "missing_image",
+                        }
+                    )
+                    return
                 model_id = "grok-imagine-1.0-edit"
             else:
                 model_id = "grok-imagine-1.0"
-                mode = "generate"
 
             model_info = ModelService.get(model_id)
             if not model_info:
@@ -790,13 +1323,15 @@ async def admin_imagine_sse(
                     "aspect_ratio": ratio,
                     "mode": mode,
                     "run_id": run_id,
+                    "model": model_id,
+                    "upstream_transport": "chat_sse" if mode == "edit" else "ws",
                 }
             )
 
             # 图生图模式：预先上传图片
             image_urls = []
             parent_post_id = None
-            if mode == "edit" and ref_images:
+            if mode == "edit":
                 try:
                     await token_mgr.reload_if_stale()
                     token = None

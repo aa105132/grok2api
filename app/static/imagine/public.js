@@ -295,15 +295,14 @@
     }
   }
 
-  async function createImagineTask(prompt, ratio, apiKey, mode = 'generate', images = []) {
+  async function createImagineTask(prompt, ratio, mode = 'generate', images = []) {
     const body = { prompt, aspect_ratio: ratio, mode };
     if (mode === 'edit' && images.length > 0) {
       body.images = images;
     }
-    const res = await fetch('/api/v1/admin/imagine/start', {
+    const res = await fetch('/api/v1/imagine/start', {
       method: 'POST',
       headers: {
-        ...buildAuthHeaders(apiKey),
         'Content-Type': 'application/json'
       },
       body: JSON.stringify(body)
@@ -319,10 +318,10 @@
     return data && data.task_id ? String(data.task_id) : '';
   }
 
-  async function createImagineTasks(prompt, ratio, concurrent, apiKey, mode = 'generate', images = []) {
+  async function createImagineTasks(prompt, ratio, concurrent, mode = 'generate', images = []) {
     const tasks = [];
     for (let i = 0; i < concurrent; i++) {
-      const taskId = await createImagineTask(prompt, ratio, apiKey, mode, images);
+      const taskId = await createImagineTask(prompt, ratio, mode, images);
       if (!taskId) {
         throw new Error('Missing task id');
       }
@@ -331,13 +330,12 @@
     return tasks;
   }
 
-  async function stopImagineTasks(taskIds, apiKey) {
+  async function stopImagineTasks(taskIds) {
     if (!taskIds || taskIds.length === 0) return;
     try {
-      await fetch('/api/v1/admin/imagine/stop', {
+      await fetch('/api/v1/imagine/stop', {
         method: 'POST',
         headers: {
-          ...buildAuthHeaders(apiKey),
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({ task_ids: taskIds })
@@ -520,7 +518,7 @@
 
   function buildSseUrl(taskId, index) {
     const httpProtocol = window.location.protocol === 'https:' ? 'https' : 'http';
-    const base = `${httpProtocol}://${window.location.host}/api/v1/admin/imagine/sse`;
+    const base = `${httpProtocol}://${window.location.host}/api/v1/imagine/sse`;
     const params = new URLSearchParams();
     params.set('task_id', taskId);
     params.set('t', String(Date.now()));
@@ -580,12 +578,6 @@
       return;
     }
 
-    const apiKey = await ensureApiKey();
-    if (apiKey === null) {
-      toast('请先登录后台', 'error');
-      return;
-    }
-
     const concurrent = concurrentSelect ? parseInt(concurrentSelect.value, 10) : 1;
     const ratio = ratioSelect ? ratioSelect.value : '2:3';
 
@@ -605,7 +597,7 @@
 
     let taskIds = [];
     try {
-      taskIds = await createImagineTasks(prompt, ratio, concurrent, apiKey, generationMode, uploadedImages);
+      taskIds = await createImagineTasks(prompt, ratio, concurrent, generationMode, uploadedImages);
     } catch (e) {
       setStatus('error', '创建任务失败');
       toast(e.message || '创建任务失败', 'error');
@@ -642,7 +634,7 @@
 
     for (let i = 0; i < taskIds.length; i++) {
       const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-      const wsUrl = `${protocol}://${window.location.host}/api/v1/admin/imagine/ws?task_id=${encodeURIComponent(taskIds[i])}`;
+      const wsUrl = `${protocol}://${window.location.host}/api/v1/imagine/ws?task_id=${encodeURIComponent(taskIds[i])}`;
       const ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
@@ -707,7 +699,7 @@
       aspect_ratio: ratio,
       mode: generationMode,
     };
-    // Images are already stored in task session by /api/v1/admin/imagine/start.
+    // Images are already stored in task session by /api/v1/imagine/start.
     // Avoid sending large base64 payload again over WebSocket.
     ws.send(JSON.stringify(payload));
     updateError('');
@@ -719,9 +711,8 @@
       pendingFallbackTimer = null;
     }
 
-    const apiKey = await ensureApiKey();
-    if (apiKey && currentTaskIds.length > 0) {
-      await stopImagineTasks(currentTaskIds, apiKey);
+    if (currentTaskIds.length > 0) {
+      await stopImagineTasks(currentTaskIds);
     }
 
     stopAllConnections();
