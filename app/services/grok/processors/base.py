@@ -1,29 +1,28 @@
 """
-响应处理器基类和通用工具
+Base processor utilities for stream parsing and asset URL handling.
 """
 
 import asyncio
+import re
 import time
-from typing import Any, AsyncGenerator, Optional, AsyncIterable, List, TypeVar
+from typing import Any, AsyncGenerator, AsyncIterable, List, Optional, TypeVar
 
 from app.core.config import get_config
 from app.core.logger import logger
 from app.services.grok.services.assets import DownloadService
 
-
 ASSET_URL = "https://assets.grok.com/"
-
 T = TypeVar("T")
 
 
 def _is_http2_stream_error(e: Exception) -> bool:
-    """检查是否为 HTTP/2 流错误"""
+    """Return True when an exception looks like an HTTP/2 stream reset/close."""
     err_str = str(e).lower()
     return "http/2" in err_str or "curl: (92)" in err_str or "stream" in err_str
 
 
 def _normalize_stream_line(line: Any) -> Optional[str]:
-    """规范化流式响应行，兼容 SSE data 前缀与空行"""
+    """Normalize stream line content and strip SSE prefixes/no-op lines."""
     if line is None:
         return None
     if isinstance(line, (bytes, bytearray)):
@@ -41,7 +40,7 @@ def _normalize_stream_line(line: Any) -> Optional[str]:
 
 
 def _collect_image_urls(obj: Any) -> List[str]:
-    """递归收集响应中的图片 URL"""
+    """Recursively collect image URLs from upstream responses."""
     urls: List[str] = []
     seen = set()
 
@@ -51,28 +50,77 @@ def _collect_image_urls(obj: Any) -> List[str]:
         seen.add(url)
         urls.append(url)
 
-    def walk(value: Any):
+    def maybe_add_image_url(candidate: str, key_hint: str = ""):
+        if not isinstance(candidate, str):
+            return
+        s = candidate.strip()
+        if not s:
+            return
+
+        key_hint = (key_hint or "").lower()
+        # Avoid echoing request-side image references as generated outputs.
+        if "reference" in key_hint:
+            return
+
+        lower = s.lower().split("?", 1)[0]
+        has_image_ext = lower.endswith(
+            (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")
+        )
+        likely_asset = (
+            "assets.grok.com" in lower
+            or "/images/" in lower
+            or "/generated/" in lower
+        )
+
+        if has_image_ext and likely_asset:
+            add(s)
+            return
+
+        # Some fields may embed URL text instead of a plain URL field.
+        for m in re.findall(
+            r"https?://assets\.grok\.com/[^\s\"'<>]+", s, flags=re.IGNORECASE
+        ):
+            ml = m.lower().split("?", 1)[0]
+            if ml.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")):
+                add(m)
+
+    def walk(value: Any, key_hint: str = ""):
         if isinstance(value, dict):
             for key, item in value.items():
-                if key in {"generatedImageUrls", "imageUrls", "imageURLs"}:
+                key_l = str(key).lower()
+                if key_l in {
+                    "generatedimageurls",
+                    "generatedimageurl",
+                    "imageurls",
+                    "imageurl",
+                    "image_url",
+                    "image_urls",
+                    "outputimageurls",
+                    "outputimageurl",
+                    "finalimageurls",
+                    "finalimageurl",
+                    "editedimageurls",
+                    "editedimageurl",
+                }:
                     if isinstance(item, list):
                         for url in item:
-                            if isinstance(url, str):
-                                add(url)
+                            maybe_add_image_url(url, key_l)
                     elif isinstance(item, str):
-                        add(item)
+                        maybe_add_image_url(item, key_l)
                     continue
-                walk(item)
+                walk(item, key_l)
         elif isinstance(value, list):
             for item in value:
-                walk(item)
+                walk(item, key_hint)
+        elif isinstance(value, str):
+            maybe_add_image_url(value, key_hint)
 
-    walk(obj)
+    walk(obj, "")
     return urls
 
 
 class StreamIdleTimeoutError(Exception):
-    """流空闲超时错误"""
+    """Raised when a stream yields no data within the configured idle timeout."""
 
     def __init__(self, idle_seconds: float):
         self.idle_seconds = idle_seconds
@@ -82,14 +130,7 @@ class StreamIdleTimeoutError(Exception):
 async def _with_idle_timeout(
     iterable: AsyncIterable[T], idle_timeout: float, model: str = ""
 ) -> AsyncGenerator[T, None]:
-    """
-    包装异步迭代器，添加空闲超时检测
-
-    Args:
-        iterable: 原始异步迭代器
-        idle_timeout: 空闲超时时间(秒)，0 表示禁用
-        model: 模型名称(用于日志)
-    """
+    """Wrap an async iterator and enforce an idle timeout per next() call."""
     if idle_timeout <= 0:
         async for item in iterable:
             yield item
@@ -111,7 +152,7 @@ async def _with_idle_timeout(
 
 
 class BaseProcessor:
-    """基础处理器"""
+    """Base class for response processors."""
 
     def __init__(self, model: str, token: str = ""):
         self.model = model
@@ -121,19 +162,19 @@ class BaseProcessor:
         self._dl_service: Optional[DownloadService] = None
 
     def _get_dl(self) -> DownloadService:
-        """获取下载服务实例（复用）"""
+        """Get or create a reusable download service."""
         if self._dl_service is None:
             self._dl_service = DownloadService()
         return self._dl_service
 
     async def close(self):
-        """释放下载服务资源"""
+        """Release download service resources."""
         if self._dl_service:
             await self._dl_service.close()
             self._dl_service = None
 
     async def process_url(self, path: str, media_type: str = "image") -> str:
-        """处理资产 URL，直接返回 Grok 资源 URL"""
+        """Normalize to Grok asset URL and return it directly."""
         if path.startswith("http"):
             from urllib.parse import urlparse
 
@@ -142,7 +183,6 @@ class BaseProcessor:
         if not path.startswith("/"):
             path = f"/{path}"
 
-        # 直接返回 Grok 资源 URL，不保存本地
         return f"{ASSET_URL.rstrip('/')}{path}"
 
 
@@ -154,3 +194,4 @@ __all__ = [
     "_collect_image_urls",
     "_is_http2_stream_error",
 ]
+

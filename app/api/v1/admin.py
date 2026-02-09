@@ -505,6 +505,13 @@ async def admin_imagine_ws(websocket: WebSocket):
                     await asyncio.sleep(2)
                     continue
 
+                if mode == "edit" and get_config("chat.auto_nsfw"):
+                    try:
+                        from app.services.grok.services.nsfw import ensure_nsfw_enabled
+                        await ensure_nsfw_enabled(token, token_mgr)
+                    except Exception as e:
+                        logger.warning(f"Auto NSFW enable failed in imagine stream: {e}")
+
                 start_at = time.time()
 
                 if mode == "edit" and image_urls:
@@ -603,7 +610,7 @@ async def admin_imagine_ws(websocket: WebSocket):
                     await _send(
                         {
                             "type": "error",
-                            "message": "Image generation returned empty data.",
+                            "message": "Image generation returned empty data (possibly blocked or upstream schema changed).",
                             "code": "empty_image",
                         }
                     )
@@ -935,6 +942,13 @@ async def public_imagine_ws(websocket: WebSocket):
                     await asyncio.sleep(2)
                     continue
 
+                if mode == "edit" and get_config("chat.auto_nsfw"):
+                    try:
+                        from app.services.grok.services.nsfw import ensure_nsfw_enabled
+                        await ensure_nsfw_enabled(token, token_mgr)
+                    except Exception as e:
+                        logger.warning(f"Auto NSFW enable failed in public imagine WS: {e}")
+
                 start_at = time.time()
 
                 if mode == "edit" and image_urls:
@@ -979,7 +993,7 @@ async def public_imagine_ws(websocket: WebSocket):
                     except Exception as e:
                         logger.warning(f"Failed to consume token: {e}")
                 else:
-                    await _send({"type": "error", "message": "Empty image data.", "code": "empty_image"})
+                    await _send({"type": "error", "message": "Empty image data (possibly blocked or upstream schema changed).", "code": "empty_image"})
 
             except asyncio.CancelledError:
                 break
@@ -1192,6 +1206,13 @@ async def public_imagine_sse(
                         await asyncio.sleep(2)
                         continue
 
+                    if mode == "edit" and get_config("chat.auto_nsfw"):
+                        try:
+                            from app.services.grok.services.nsfw import ensure_nsfw_enabled
+                            await ensure_nsfw_enabled(token, token_mgr)
+                        except Exception as e:
+                            logger.warning(f"Auto NSFW enable failed in public imagine SSE: {e}")
+
                     start_at = time.time()
 
                     if mode == "edit" and image_urls:
@@ -1236,7 +1257,7 @@ async def public_imagine_sse(
                         except Exception:
                             pass
                     else:
-                        yield _sse_event({"type": "error", "message": "Empty image data.", "code": "empty_image"})
+                        yield _sse_event({"type": "error", "message": "Empty image data (possibly blocked or upstream schema changed).", "code": "empty_image"})
                 except asyncio.CancelledError:
                     break
                 except Exception as e:
@@ -1427,6 +1448,13 @@ async def admin_imagine_sse(
                         await asyncio.sleep(2)
                         continue
 
+                    if mode == "edit" and get_config("chat.auto_nsfw"):
+                        try:
+                            from app.services.grok.services.nsfw import ensure_nsfw_enabled
+                            await ensure_nsfw_enabled(token, token_mgr)
+                        except Exception as e:
+                            logger.warning(f"Auto NSFW enable failed in admin imagine SSE: {e}")
+
                     start_at = time.time()
 
                     if mode == "edit" and image_urls:
@@ -1525,7 +1553,7 @@ async def admin_imagine_sse(
                         yield _sse_event(
                             {
                                 "type": "error",
-                                "message": "Image generation returned empty data.",
+                                "message": "Image generation returned empty data (possibly blocked or upstream schema changed).",
                                 "code": "empty_image",
                             }
                         )
