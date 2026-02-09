@@ -32,6 +32,33 @@
           <div class="card-title">生成设置</div>
           <div class="card-content" id="settingsContent">
             <div class="settings-layout">
+              <!-- 模式切换 -->
+              <div class="mode-toggle-row">
+                <label class="field-label">生成模式</label>
+                <div class="gen-mode-switch" role="group" aria-label="Generation mode">
+                  <button class="gen-mode-btn active" data-gen-mode="generate" type="button">文生图</button>
+                  <button class="gen-mode-btn" data-gen-mode="edit" type="button">图生图</button>
+                </div>
+              </div>
+
+              <!-- 图片上传区域（图生图模式） -->
+              <div id="imageUploadSection" class="image-upload-section hidden">
+                <label class="field-label">参考图片</label>
+                <div id="imageDropZone" class="image-drop-zone">
+                  <input type="file" id="imageFileInput" accept="image/png,image/jpeg,image/webp" multiple hidden>
+                  <div class="drop-zone-content">
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                      <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                      <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                      <polyline points="21 15 16 10 5 21"></polyline>
+                    </svg>
+                    <span>点击或拖拽上传图片</span>
+                    <span class="drop-zone-hint">支持 PNG、JPG、WebP，最多 4 张</span>
+                  </div>
+                </div>
+                <div id="imagePreviewList" class="image-preview-list"></div>
+              </div>
+
               <div class="settings-top">
                 <div class="settings-prompt">
                   <label class="field-label" for="promptInput">提示词</label>

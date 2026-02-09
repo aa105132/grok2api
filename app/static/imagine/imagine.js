@@ -20,6 +20,13 @@
   const lightboxImg = document.getElementById('lightboxImg');
   const closeLightbox = document.getElementById('closeLightbox');
 
+  // 图生图相关元素
+  const genModeButtons = document.querySelectorAll('.gen-mode-btn');
+  const imageUploadSection = document.getElementById('imageUploadSection');
+  const imageDropZone = document.getElementById('imageDropZone');
+  const imageFileInput = document.getElementById('imageFileInput');
+  const imagePreviewList = document.getElementById('imagePreviewList');
+
   let wsConnections = [];
   let sseConnections = [];
   let imageCount = 0;
@@ -36,6 +43,10 @@
   let useFileSystemAPI = false;
   let isSelectionMode = false;
   let selectedImages = new Set();
+
+  // 图生图状态
+  let generationMode = 'generate'; // 'generate' or 'edit'
+  let uploadedImages = []; // 存储上传的图片 base64
 
   function toast(message, type) {
     if (typeof showToast === 'function') {
@@ -121,6 +132,141 @@
 
   function updateError(value) {}
 
+  // 生成模式切换
+  function setGenerationMode(mode) {
+    if (!['generate', 'edit'].includes(mode)) return;
+    generationMode = mode;
+
+    genModeButtons.forEach(btn => {
+      if (btn.dataset.genMode === mode) {
+        btn.classList.add('active');
+      } else {
+        btn.classList.remove('active');
+      }
+    });
+
+    // 显示/隐藏图片上传区域
+    if (imageUploadSection) {
+      if (mode === 'edit') {
+        imageUploadSection.classList.remove('hidden');
+      } else {
+        imageUploadSection.classList.add('hidden');
+      }
+    }
+
+    // 更新提示词 placeholder
+    if (promptInput) {
+      if (mode === 'edit') {
+        promptInput.placeholder = '描述你想要对图片进行的修改，例如：将背景改为海滩';
+      } else {
+        promptInput.placeholder = '描述你想要的画面，例如：未来城市霓虹雨夜，广角摄影';
+      }
+    }
+  }
+
+  // 图片上传处理
+  function handleImageFiles(files) {
+    const maxImages = 4;
+    const allowedTypes = ['image/png', 'image/jpeg', 'image/webp'];
+    const maxSize = 10 * 1024 * 1024; // 10MB
+
+    for (const file of files) {
+      if (uploadedImages.length >= maxImages) {
+        toast(`最多只能上传 ${maxImages} 张图片`, 'warning');
+        break;
+      }
+
+      if (!allowedTypes.includes(file.type)) {
+        toast(`不支持的图片格式: ${file.name}`, 'error');
+        continue;
+      }
+
+      if (file.size > maxSize) {
+        toast(`图片太大: ${file.name}`, 'error');
+        continue;
+      }
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const dataUrl = e.target.result;
+        uploadedImages.push(dataUrl);
+        renderImagePreviews();
+      };
+      reader.readAsDataURL(file);
+    }
+  }
+
+  function renderImagePreviews() {
+    if (!imagePreviewList) return;
+    imagePreviewList.innerHTML = '';
+
+    uploadedImages.forEach((dataUrl, index) => {
+      const item = document.createElement('div');
+      item.className = 'image-preview-item';
+
+      const img = document.createElement('img');
+      img.src = dataUrl;
+      img.alt = `预览图 ${index + 1}`;
+
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'remove-btn';
+      removeBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
+      removeBtn.onclick = (e) => {
+        e.stopPropagation();
+        uploadedImages.splice(index, 1);
+        renderImagePreviews();
+      };
+
+      item.appendChild(img);
+      item.appendChild(removeBtn);
+      imagePreviewList.appendChild(item);
+    });
+  }
+
+  // 初始化图片上传区域
+  if (imageDropZone && imageFileInput) {
+    imageDropZone.addEventListener('click', () => {
+      imageFileInput.click();
+    });
+
+    imageFileInput.addEventListener('change', (e) => {
+      if (e.target.files && e.target.files.length > 0) {
+        handleImageFiles(Array.from(e.target.files));
+        imageFileInput.value = '';
+      }
+    });
+
+    imageDropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      imageDropZone.classList.add('drag-over');
+    });
+
+    imageDropZone.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      imageDropZone.classList.remove('drag-over');
+    });
+
+    imageDropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      imageDropZone.classList.remove('drag-over');
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        handleImageFiles(Array.from(e.dataTransfer.files));
+      }
+    });
+  }
+
+  // 初始化生成模式切换按钮
+  if (genModeButtons.length > 0) {
+    genModeButtons.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const mode = btn.dataset.genMode;
+        if (mode) {
+          setGenerationMode(mode);
+        }
+      });
+    });
+  }
+
   function inferMime(base64) {
     if (!base64) return 'image/jpeg';
     if (base64.startsWith('iVBOR')) return 'image/png';
@@ -149,14 +295,18 @@
     }
   }
 
-  async function createImagineTask(prompt, ratio, apiKey) {
+  async function createImagineTask(prompt, ratio, apiKey, mode = 'generate', images = []) {
+    const body = { prompt, aspect_ratio: ratio, mode };
+    if (mode === 'edit' && images.length > 0) {
+      body.images = images;
+    }
     const res = await fetch('/api/v1/admin/imagine/start', {
       method: 'POST',
       headers: {
         ...buildAuthHeaders(apiKey),
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ prompt, aspect_ratio: ratio })
+      body: JSON.stringify(body)
     });
     if (!res.ok) {
       const text = await res.text();
@@ -166,10 +316,10 @@
     return data && data.task_id ? String(data.task_id) : '';
   }
 
-  async function createImagineTasks(prompt, ratio, concurrent, apiKey) {
+  async function createImagineTasks(prompt, ratio, concurrent, apiKey, mode = 'generate', images = []) {
     const tasks = [];
     for (let i = 0; i < concurrent; i++) {
-      const taskId = await createImagineTask(prompt, ratio, apiKey);
+      const taskId = await createImagineTask(prompt, ratio, apiKey, mode, images);
       if (!taskId) {
         throw new Error('Missing task id');
       }
@@ -421,6 +571,12 @@
       return;
     }
 
+    // 图生图模式检查
+    if (generationMode === 'edit' && uploadedImages.length === 0) {
+      toast('请先上传参考图片', 'error');
+      return;
+    }
+
     const apiKey = await ensureApiKey();
     if (apiKey === null) {
       toast('请先登录后台', 'error');
@@ -429,7 +585,7 @@
 
     const concurrent = concurrentSelect ? parseInt(concurrentSelect.value, 10) : 1;
     const ratio = ratioSelect ? ratioSelect.value : '2:3';
-    
+
     if (isRunning) {
       toast('已在运行中', 'warning');
       return;
@@ -446,16 +602,18 @@
 
     let taskIds = [];
     try {
-      taskIds = await createImagineTasks(prompt, ratio, concurrent, apiKey);
+      taskIds = await createImagineTasks(prompt, ratio, concurrent, apiKey, generationMode, uploadedImages);
     } catch (e) {
       setStatus('error', '创建任务失败');
+      toast(e.message || '创建任务失败', 'error');
       startBtn.disabled = false;
       isRunning = false;
       return;
     }
     currentTaskIds = taskIds;
 
-    if (modePreference === 'sse') {
+    // 图生图模式强制使用 SSE（因为需要通过 chat API）
+    if (generationMode === 'edit' || modePreference === 'sse') {
       startSSE(taskIds);
       return;
     }
@@ -543,8 +701,12 @@
     const payload = {
       type: 'start',
       prompt,
-      aspect_ratio: ratio
+      aspect_ratio: ratio,
+      mode: generationMode,
     };
+    if (generationMode === 'edit' && uploadedImages.length > 0) {
+      payload.images = uploadedImages;
+    }
     ws.send(JSON.stringify(payload));
     updateError('');
   }
