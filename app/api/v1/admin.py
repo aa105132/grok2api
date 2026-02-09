@@ -1188,14 +1188,14 @@ async def admin_cache_page():
 @router.get("/api/v1/admin/cache", dependencies=[Depends(verify_api_key)])
 async def get_cache_stats_api(request: Request):
     """获取缓存统计"""
-    from app.services.grok.services.assets import DownloadService, ListService
+    from app.services.grok.services.assets import ListService
     from app.services.token.manager import get_token_manager
     from app.services.grok.utils.batch import run_in_batches
 
     try:
-        dl_service = DownloadService()
-        image_stats = dl_service.get_stats("image")
-        video_stats = dl_service.get_stats("video")
+        # 本地缓存已禁用，返回空统计
+        image_stats = {"count": 0, "size_mb": 0.0}
+        video_stats = {"count": 0, "size_mb": 0.0}
 
         mgr = await get_token_manager()
         pools = mgr.pools
@@ -1462,9 +1462,9 @@ async def load_online_cache_api_async(data: dict):
 
     async def _run():
         try:
-            dl_service = DownloadService()
-            image_stats = dl_service.get_stats("image")
-            video_stats = dl_service.get_stats("video")
+            # 本地缓存已禁用，返回空统计
+            image_stats = {"count": 0, "size_mb": 0.0}
+            video_stats = {"count": 0, "size_mb": 0.0}
 
             async def _fetch_detail(token: str):
                 account = account_map.get(token)
@@ -1558,17 +1558,12 @@ async def load_online_cache_api_async(data: dict):
 
 @router.post("/api/v1/admin/cache/clear", dependencies=[Depends(verify_api_key)])
 async def clear_local_cache_api(data: dict):
-    """清理本地缓存"""
-    from app.services.grok.services.assets import DownloadService
-
-    cache_type = data.get("type", "image")
-
-    try:
-        dl_service = DownloadService()
-        result = dl_service.clear(cache_type)
-        return {"status": "success", "result": result}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    """清理本地缓存 - 已禁用"""
+    return {
+        "status": "disabled",
+        "message": "本地缓存功能已禁用，图片/视频直接返回 Grok 资源 URL",
+        "result": {"count": 0, "size_mb": 0.0}
+    }
 
 
 @router.get("/api/v1/admin/cache/list", dependencies=[Depends(verify_api_key)])
@@ -1578,34 +1573,25 @@ async def list_local_cache_api(
     page: int = 1,
     page_size: int = 1000,
 ):
-    """列出本地缓存文件"""
-    from app.services.grok.services.assets import DownloadService
-
-    try:
-        if type_:
-            cache_type = type_
-        dl_service = DownloadService()
-        result = dl_service.list_files(cache_type, page, page_size)
-        return {"status": "success", **result}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    """列出本地缓存文件 - 已禁用"""
+    return {
+        "status": "disabled",
+        "message": "本地缓存功能已禁用，图片/视频直接返回 Grok 资源 URL",
+        "total": 0,
+        "page": page,
+        "page_size": page_size,
+        "items": []
+    }
 
 
 @router.post("/api/v1/admin/cache/item/delete", dependencies=[Depends(verify_api_key)])
 async def delete_local_cache_item_api(data: dict):
-    """删除单个本地缓存文件"""
-    from app.services.grok.services.assets import DownloadService
-
-    cache_type = data.get("type", "image")
-    name = data.get("name")
-    if not name:
-        raise HTTPException(status_code=400, detail="Missing file name")
-    try:
-        dl_service = DownloadService()
-        result = dl_service.delete_file(cache_type, name)
-        return {"status": "success", "result": result}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    """删除单个本地缓存文件 - 已禁用"""
+    return {
+        "status": "disabled",
+        "message": "本地缓存功能已禁用，图片/视频直接返回 Grok 资源 URL",
+        "result": {"deleted": False}
+    }
 
 
 @router.post("/api/v1/admin/cache/online/clear", dependencies=[Depends(verify_api_key)])

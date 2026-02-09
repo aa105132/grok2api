@@ -67,3 +67,7 @@ usage_max_tokens = 1000
 nsfw_max_concurrent = 10
 nsfw_batch_size = 50
 nsfw_max_tokens = 1000
+
+[video]
+video_ws = false
+video_ws_blocked_seconds = 60
