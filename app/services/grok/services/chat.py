@@ -245,6 +245,10 @@ class GrokChatService:
         proxies = {"http": self.proxy, "https": self.proxy} if self.proxy else None
         timeout = get_config("network.timeout")
 
+        # Log the actual payload being sent
+        if raw_payload is not None:
+            logger.info(f"Chat raw_payload: {orjson.dumps(payload).decode()[:500]}")
+
         logger.debug(
             f"Chat request: model={model}, mode={mode}, stream={stream}, attachments={len(file_attachments or [])}"
         )

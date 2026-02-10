@@ -986,10 +986,19 @@ async def public_imagine_ws(websocket: WebSocket):
                         "responseMetadata": {"modelConfigOverride": model_config_override},
                     }
 
+                    logger.info(
+                        f"Edit mode chat payload: model={model_info.grok_model}, "
+                        f"image_urls={image_urls}, "
+                        f"model_config_override={model_config_override}, "
+                        f"prompt={prompt[:50]}"
+                    )
+
                     chat_service = GrokChatService()
                     response = await chat_service.chat(token=token, message=prompt, model=model_info.grok_model, mode=None, stream=True, raw_payload=raw_payload)
                     processor = ImageCollectProcessor(model_info.model_id, token, response_format="b64_json")
                     images = await processor.process(response)
+
+                    logger.info(f"Edit mode response: images_count={len(images) if images else 0}")
                 else:
                     upstream = image_service.stream(token=token, prompt=prompt, aspect_ratio=aspect_ratio, n=6, enable_nsfw=enable_nsfw)
                     processor = ImageWSCollectProcessor(model_info.model_id, token, n=6, response_format="b64_json")

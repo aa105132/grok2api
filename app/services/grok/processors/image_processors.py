@@ -193,6 +193,10 @@ class ImageCollectProcessor(BaseProcessor):
                     continue
                 try:
                     data = orjson.loads(line)
+                    # Log raw response structure for debugging
+                    if "result" in data and "response" in data.get("result", {}):
+                        resp_keys = list(data.get("result", {}).get("response", {}).keys())
+                        logger.debug(f"ImageCollectProcessor response keys: {resp_keys}")
                 except orjson.JSONDecodeError:
                     continue
 
@@ -200,6 +204,7 @@ class ImageCollectProcessor(BaseProcessor):
 
                 if mr := resp.get("modelResponse"):
                     if urls := _collect_image_urls(mr):
+                        logger.info(f"ImageCollectProcessor: extracted {len(urls)} URLs from modelResponse: {urls}")
                         for url in urls:
                             if self.response_format == "url":
                                 processed = await self.process_url(url, "image")
