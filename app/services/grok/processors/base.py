@@ -5,6 +5,7 @@ Base processor utilities for stream parsing and asset URL handling.
 import asyncio
 import re
 import time
+from urllib.parse import quote, urlparse
 from typing import Any, AsyncGenerator, AsyncIterable, List, Optional, TypeVar
 
 from app.core.config import get_config
@@ -179,14 +180,20 @@ class BaseProcessor:
             self._dl_service = None
 
     async def process_url(self, path: str, media_type: str = "image") -> str:
-        """Normalize to Grok asset URL and return it directly."""
+        """Normalize asset URL and map to configured public app URL when available."""
         if path.startswith("http"):
-            from urllib.parse import urlparse
-
-            path = urlparse(path).path
+            parsed = urlparse(path)
+            path = parsed.path or "/"
+            if parsed.query:
+                path = f"{path}?{parsed.query}"
 
         if not path.startswith("/"):
             path = f"/{path}"
+
+        app_url = str(self.app_url or "").strip().rstrip("/")
+        if app_url:
+            encoded_path = quote(path, safe="")
+            return f"{app_url}/v1/files/proxy?path={encoded_path}"
 
         return f"{ASSET_URL.rstrip('/')}{path}"
 

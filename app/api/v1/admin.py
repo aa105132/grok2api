@@ -7,7 +7,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse, Response
 from typing import Optional, List
 from pydantic import BaseModel
 from app.core.auth import verify_api_key, verify_app_key, get_admin_api_key
@@ -31,12 +31,13 @@ from app.api.v1.image import resolve_aspect_ratio
 from app.services.grok.services.voice import VoiceService
 from app.services.grok.services.image import image_service
 from app.services.grok.services.chat import GrokChatService
-from app.services.grok.services.assets import UploadService
+from app.services.grok.services.assets import UploadService, DownloadService
 from app.services.grok.services.media import VideoService
 from app.services.grok.models.model import ModelService
 from app.services.grok.processors.image_ws_processors import ImageWSCollectProcessor
 from app.services.grok.processors import ImageCollectProcessor
 from app.services.token import EffortType
+from urllib.parse import urlparse
 
 TEMPLATE_DIR = Path(__file__).parent.parent.parent / "static"
 
@@ -159,6 +160,42 @@ async def render_template(filename: str):
 
 def _sse_event(payload: dict) -> str:
     return f"data: {orjson.dumps(payload).decode()}\n\n"
+
+
+def _normalize_asset_proxy_path(path: str) -> str:
+    raw = str(path or "").strip()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Asset path is required")
+
+    if raw.startswith(("http://", "https://")):
+        parsed = urlparse(raw)
+        host = (parsed.netloc or "").lower()
+        if not host.endswith("assets.grok.com"):
+            raise HTTPException(status_code=400, detail="Only assets.grok.com URLs are supported")
+        normalized = parsed.path or "/"
+        if parsed.query:
+            normalized = f"{normalized}?{parsed.query}"
+    else:
+        normalized = raw
+
+    if not normalized.startswith("/"):
+        normalized = f"/{normalized}"
+
+    plain_path = normalized.split("?", 1)[0]
+    if ".." in plain_path:
+        raise HTTPException(status_code=400, detail="Invalid asset path")
+
+    return normalized
+
+
+async def _get_asset_proxy_token() -> str:
+    token_mgr = await get_token_manager()
+    await token_mgr.reload_if_stale()
+    for pool_name in ("ssoBasic", "ssoSuper"):
+        token = token_mgr.get_token(pool_name)
+        if token:
+            return token
+    raise HTTPException(status_code=503, detail="No available tokens for asset proxy")
 
 
 def _verify_stream_api_key(request: Request) -> None:
@@ -353,6 +390,43 @@ async def public_voice_token(
         voice=voice,
         personality=personality,
         speed=speed,
+    )
+
+
+@router.get("/v1/files/proxy", include_in_schema=False)
+async def public_asset_proxy(path: str = Query(..., description="assets.grok.com 文件路径或完整 URL")):
+    """公开资源代理：将 Grok 资产路径映射为当前服务可访问链接"""
+    asset_path = _normalize_asset_proxy_path(path)
+    token = await _get_asset_proxy_token()
+
+    download_service = DownloadService()
+    try:
+        data_uri = await download_service.to_base64(asset_path, token, "image")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"Asset proxy download failed: {e}")
+        raise HTTPException(status_code=502, detail="Failed to fetch asset")
+    finally:
+        await download_service.close()
+
+    if "," not in data_uri:
+        raise HTTPException(status_code=502, detail="Invalid asset payload")
+
+    header, b64 = data_uri.split(",", 1)
+    mime = "application/octet-stream"
+    if header.startswith("data:"):
+        mime = header[5:].split(";", 1)[0] or mime
+
+    try:
+        binary = base64.b64decode(b64)
+    except Exception:
+        raise HTTPException(status_code=502, detail="Invalid asset payload")
+
+    return Response(
+        content=binary,
+        media_type=mime,
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
     )
 
 
