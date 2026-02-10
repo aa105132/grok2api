@@ -417,6 +417,7 @@ async def admin_imagine_ws(websocket: WebSocket):
         # 图生图模式：预先上传图片
         image_urls = []
         parent_post_id = None
+        pinned_edit_token = None
         if mode == "edit":
             logger.info(f"Edit mode: uploading {len(ref_images) if ref_images else 0} reference images")
             try:
@@ -457,6 +458,7 @@ async def admin_imagine_ws(websocket: WebSocket):
                         }
                     )
                     return
+                pinned_edit_token = token
 
                 # 创建 image post
                 try:
@@ -489,12 +491,15 @@ async def admin_imagine_ws(websocket: WebSocket):
 
         while not stop_event.is_set():
             try:
-                await token_mgr.reload_if_stale()
                 token = None
-                for pool_name in ModelService.pool_candidates_for_model(model_id):
-                    token = token_mgr.get_token(pool_name)
-                    if token:
-                        break
+                if mode == "edit":
+                    token = pinned_edit_token
+                else:
+                    await token_mgr.reload_if_stale()
+                    for pool_name in ModelService.pool_candidates_for_model(model_id):
+                        token = token_mgr.get_token(pool_name)
+                        if token:
+                            break
 
                 if not token:
                     await _send(
@@ -894,6 +899,7 @@ async def public_imagine_ws(websocket: WebSocket):
 
         image_urls = []
         parent_post_id = None
+        pinned_edit_token = None
         if mode == "edit":
             try:
                 await token_mgr.reload_if_stale()
@@ -921,6 +927,7 @@ async def public_imagine_ws(websocket: WebSocket):
                 if not image_urls:
                     await _send({"type": "error", "message": "Failed to upload images.", "code": "upload_failed"})
                     return
+                pinned_edit_token = token
 
                 try:
                     media_service = VideoService()
@@ -945,12 +952,15 @@ async def public_imagine_ws(websocket: WebSocket):
 
         while not stop_event.is_set():
             try:
-                await token_mgr.reload_if_stale()
                 token = None
-                for pool_name in ModelService.pool_candidates_for_model(model_id):
-                    token = token_mgr.get_token(pool_name)
-                    if token:
-                        break
+                if mode == "edit":
+                    token = pinned_edit_token
+                else:
+                    await token_mgr.reload_if_stale()
+                    for pool_name in ModelService.pool_candidates_for_model(model_id):
+                        token = token_mgr.get_token(pool_name)
+                        if token:
+                            break
 
                 if not token:
                     await _send({"type": "error", "message": "No available tokens.", "code": "rate_limit_exceeded"})
@@ -1162,6 +1172,7 @@ async def public_imagine_sse(
 
             image_urls = []
             parent_post_id = None
+            pinned_edit_token = None
             if mode == "edit":
                 try:
                     await token_mgr.reload_if_stale()
@@ -1189,6 +1200,7 @@ async def public_imagine_sse(
                     if not image_urls:
                         yield _sse_event({"type": "error", "message": "Failed to upload images.", "code": "upload_failed"})
                         return
+                    pinned_edit_token = token
 
                     try:
                         media_service = VideoService()
@@ -1219,12 +1231,15 @@ async def public_imagine_sse(
                         break
 
                 try:
-                    await token_mgr.reload_if_stale()
                     token = None
-                    for pool_name in ModelService.pool_candidates_for_model(model_id):
-                        token = token_mgr.get_token(pool_name)
-                        if token:
-                            break
+                    if mode == "edit":
+                        token = pinned_edit_token
+                    else:
+                        await token_mgr.reload_if_stale()
+                        for pool_name in ModelService.pool_candidates_for_model(model_id):
+                            token = token_mgr.get_token(pool_name)
+                            if token:
+                                break
 
                     if not token:
                         yield _sse_event({"type": "error", "message": "No available tokens.", "code": "rate_limit_exceeded"})
@@ -1378,6 +1393,7 @@ async def admin_imagine_sse(
             # 图生图模式：预先上传图片
             image_urls = []
             parent_post_id = None
+            pinned_edit_token = None
             if mode == "edit":
                 try:
                     await token_mgr.reload_if_stale()
@@ -1417,6 +1433,7 @@ async def admin_imagine_sse(
                             }
                         )
                         return
+                    pinned_edit_token = token
 
                     # 创建 image post
                     try:
@@ -1456,12 +1473,15 @@ async def admin_imagine_sse(
                         break
 
                 try:
-                    await token_mgr.reload_if_stale()
                     token = None
-                    for pool_name in ModelService.pool_candidates_for_model(model_id):
-                        token = token_mgr.get_token(pool_name)
-                        if token:
-                            break
+                    if mode == "edit":
+                        token = pinned_edit_token
+                    else:
+                        await token_mgr.reload_if_stale()
+                        for pool_name in ModelService.pool_candidates_for_model(model_id):
+                            token = token_mgr.get_token(pool_name)
+                            if token:
+                                break
 
                     if not token:
                         yield _sse_event(

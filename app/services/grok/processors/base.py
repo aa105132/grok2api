@@ -68,11 +68,14 @@ def _collect_image_urls(obj: Any) -> List[str]:
         )
         likely_asset = (
             "assets.grok.com" in lower
+            or lower.startswith("users/")
+            or lower.startswith("/users/")
             or "/images/" in lower
             or "/generated/" in lower
         )
+        is_content_path = lower.endswith("/content")
 
-        if has_image_ext and likely_asset:
+        if likely_asset and (has_image_ext or is_content_path):
             add(s)
             return
 
@@ -81,7 +84,9 @@ def _collect_image_urls(obj: Any) -> List[str]:
             r"https?://assets\.grok\.com/[^\s\"'<>]+", s, flags=re.IGNORECASE
         ):
             ml = m.lower().split("?", 1)[0]
-            if ml.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")):
+            if ml.endswith(
+                (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", "/content")
+            ):
                 add(m)
 
     def walk(value: Any, key_hint: str = ""):
@@ -194,4 +199,3 @@ __all__ = [
     "_collect_image_urls",
     "_is_http2_stream_error",
 ]
-

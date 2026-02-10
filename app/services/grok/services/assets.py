@@ -498,10 +498,28 @@ class DownloadService(BaseService):
     ) -> str:
         """直接下载并转 base64，不保存到本地"""
         try:
-            if not file_path.startswith("/"):
-                file_path = f"/{file_path}"
+            raw_input = str(file_path or "").strip()
+            if not raw_input:
+                raise ValidationException("Invalid file path: empty path")
 
-            url = f"{DOWNLOAD_API}{file_path}"
+            # Accept both relative asset paths and absolute URLs.
+            if self.is_url(raw_input):
+                parsed = urlparse(raw_input)
+                host = (parsed.netloc or "").lower()
+                path = parsed.path or "/"
+                if parsed.query:
+                    path = f"{path}?{parsed.query}"
+
+                # Keep canonical assets host for assets URLs; otherwise fetch directly.
+                if host.endswith("assets.grok.com"):
+                    file_path = path
+                    url = f"{DOWNLOAD_API}{file_path}"
+                else:
+                    file_path = path
+                    url = raw_input
+            else:
+                file_path = raw_input if raw_input.startswith("/") else f"/{raw_input}"
+                url = f"{DOWNLOAD_API}{file_path}"
             headers = self._build_headers(token, download=True)
 
             async with _get_assets_semaphore():
