@@ -370,6 +370,7 @@ async def admin_imagine_ws(websocket: WebSocket):
 
     async def _run(prompt: str, aspect_ratio: str, mode: str = "generate", ref_images: Optional[List[str]] = None):
         # 根据模式选择模型
+        logger.info(f"Imagine _run: mode={mode}, ref_images_count={len(ref_images) if ref_images else 0}, prompt={prompt[:50]}")
         if mode == "edit":
             if not ref_images:
                 await _send(
@@ -417,6 +418,7 @@ async def admin_imagine_ws(websocket: WebSocket):
         image_urls = []
         parent_post_id = None
         if mode == "edit":
+            logger.info(f"Edit mode: uploading {len(ref_images) if ref_images else 0} reference images")
             try:
                 await token_mgr.reload_if_stale()
                 token = None
@@ -513,9 +515,11 @@ async def admin_imagine_ws(websocket: WebSocket):
                         logger.warning(f"Auto NSFW enable failed in imagine stream: {e}")
 
                 start_at = time.time()
+                logger.info(f"Imagine loop: mode={mode}, image_urls_count={len(image_urls)}, model={model_id}")
 
                 if mode == "edit" and image_urls:
                     # 图生图模式：使用 chat API
+                    logger.info(f"Using EDIT path: image_urls={[u[:80] for u in image_urls]}, parent_post_id={parent_post_id}")
                     model_config_override = {
                         "modelMap": {
                             "imageEditModel": "imagine",
@@ -563,6 +567,7 @@ async def admin_imagine_ws(websocket: WebSocket):
                     images = await processor.process(response)
                 else:
                     # 文生图模式：使用 WebSocket
+                    logger.info(f"Using GENERATE path (text-to-image): mode={mode}, image_urls_empty={not image_urls}")
                     upstream = image_service.stream(
                         token=token,
                         prompt=prompt,
@@ -674,20 +679,28 @@ async def admin_imagine_ws(websocket: WebSocket):
                 if not ratio:
                     ratio = "2:3"
                 ratio = resolve_aspect_ratio(ratio)
+                payload_mode = payload.get("mode")
+                session_mode = session.get("mode") if session else None
                 mode = str(
-                    payload.get("mode")
-                    or (session.get("mode") if session else "generate")
+                    payload_mode
+                    or session_mode
                     or "generate"
                 ).strip()
                 if mode not in ("generate", "edit"):
                     mode = "generate"
-                ref_images = payload.get("images") or []
-                if not isinstance(ref_images, list):
-                    ref_images = []
+                payload_images = payload.get("images") or []
+                if not isinstance(payload_images, list):
+                    payload_images = []
+                ref_images = payload_images
                 if mode == "edit" and not ref_images and session:
                     ref_images = session.get("images") or []
                     if not isinstance(ref_images, list):
                         ref_images = []
+                logger.info(
+                    f"Imagine WS start: payload_mode={payload_mode}, session_mode={session_mode}, "
+                    f"resolved_mode={mode}, payload_images_count={len(payload_images)}, "
+                    f"ref_images_count={len(ref_images)}, session_id={session_id}"
+                )
                 await _stop_run()
                 stop_event.clear()
                 run_task = asyncio.create_task(_run(prompt, ratio, mode, ref_images if mode == "edit" else None))
@@ -758,6 +771,7 @@ async def admin_imagine_start(data: ImagineStartRequest):
             )
 
     task_id = await _create_imagine_session(prompt, ratio, mode, images)
+    logger.info(f"Imagine session created: task_id={task_id}, mode={mode}, images_count={len(images)}, prompt={prompt[:50]}")
     return {"task_id": task_id, "aspect_ratio": ratio, "mode": mode}
 
 
@@ -846,6 +860,7 @@ async def public_imagine_ws(websocket: WebSocket):
         stop_event.clear()
 
     async def _run(prompt: str, aspect_ratio: str, mode: str = "generate", ref_images: Optional[List[str]] = None):
+        logger.info(f"Public Imagine _run: mode={mode}, ref_images_count={len(ref_images) if ref_images else 0}, prompt={prompt[:50]}")
         if mode == "edit":
             if not ref_images:
                 await _send({"type": "error", "message": "Edit mode requires at least one image.", "code": "missing_image"})
@@ -1095,6 +1110,7 @@ async def public_imagine_sse(
         ratio = str(session.get("aspect_ratio") or "2:3").strip() or "2:3"
         mode = str(session.get("mode") or "generate").strip()
         ref_images = session.get("images") or []
+        logger.info(f"Public SSE session: mode={mode}, ref_images_count={len(ref_images)}, task_id={task_id}")
     else:
         prompt = (prompt or "").strip()
         if not prompt:
@@ -1295,6 +1311,7 @@ async def admin_imagine_sse(
         ratio = str(session.get("aspect_ratio") or "2:3").strip() or "2:3"
         mode = str(session.get("mode") or "generate").strip()
         ref_images = session.get("images") or []
+        logger.info(f"Admin SSE session: mode={mode}, ref_images_count={len(ref_images)}, task_id={task_id}, prompt={prompt[:50]}")
     else:
         prompt = (prompt or "").strip()
         if not prompt:
@@ -1456,9 +1473,11 @@ async def admin_imagine_sse(
                             logger.warning(f"Auto NSFW enable failed in admin imagine SSE: {e}")
 
                     start_at = time.time()
+                    logger.info(f"Admin SSE loop: mode={mode}, image_urls_count={len(image_urls)}, model={model_id}")
 
                     if mode == "edit" and image_urls:
                         # 图生图模式：使用 chat API
+                        logger.info(f"Admin SSE using EDIT path: image_urls={[u[:80] for u in image_urls]}")
                         model_config_override = {
                             "modelMap": {
                                 "imageEditModel": "imagine",
