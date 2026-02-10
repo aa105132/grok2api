@@ -15,10 +15,20 @@
   <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.7.3/dist/livekit-client.umd.min.js"></script>
 </head>
 
-<body class="min-h-screen flex flex-col" style="background-color: var(--bg);" data-require-auth="true"
-  data-voice-token-endpoint="/api/v1/admin/voice/token">
+<body class="min-h-screen flex flex-col" style="background-color: var(--bg);"
+  data-voice-token-endpoint="/api/v1/voice/token">
   <div id="toast-container" class="toast-container"></div>
-  <div id="app-header"></div>
+
+  <header class="border-b border-[var(--border)] bg-[var(--bg)]">
+    <div class="max-w-5xl mx-auto px-6 h-14 flex items-center justify-between">
+      <a href="/imagine" class="font-semibold tracking-tight hover:text-black">Grok2API</a>
+      <div class="flex items-center gap-4 text-sm text-[var(--accents-5)]">
+        <a href="/imagine" class="hover:text-black">Imagine</a>
+        <a href="/voice" class="text-black">Voice Live</a>
+        <a href="/admin" class="hover:text-black">管理后台</a>
+      </div>
+    </div>
+  </header>
 
   <main class="space-y-6 flex-1 container mx-auto max-w-5xl px-6 py-8 fade-in">
     <div class="space-y-6">
@@ -146,11 +156,13 @@
     </div>
   </main>
 
-  <div id="app-footer"></div>
+  <footer class="border-t border-[var(--border)] bg-[var(--bg)]">
+    <div class="max-w-5xl mx-auto px-6 h-12 text-xs text-[var(--accents-4)] flex items-center justify-between">
+      <span>由 Grok2API 驱动</span>
+      <a href="/admin" class="hover:text-black">管理后台</a>
+    </div>
+  </footer>
 
-  <script src="/static/common/admin-auth.js?v=2"></script>
-  <script src="/static/common/header.js?v=4"></script>
-  <script src="/static/common/footer.js?v=1"></script>
   <script src="/static/common/toast.js"></script>
   <script src="/static/voice/voice.js?v=9"></script>
 </body>

@@ -21,6 +21,9 @@
   const copyLogBtn = document.getElementById('copyLogBtn');
   const clearLogBtn = document.getElementById('clearLogBtn');
   const visualizer = document.getElementById('visualizer');
+  const bodyDataset = document.body ? document.body.dataset : {};
+  const voiceTokenEndpoint = bodyDataset.voiceTokenEndpoint || '/api/v1/admin/voice/token';
+  const requireAuth = bodyDataset.requireAuth === 'true';
 
   function log(message, level = 'info') {
     if (!logContainer) {
@@ -122,19 +125,31 @@
     throw new Error(`当前环境不支持麦克风权限，${secureHint}`);
   }
 
+  async function resolveAuthHeaders() {
+    if (!requireAuth) {
+      return {};
+    }
+    if (typeof ensureApiKey !== 'function') {
+      throw new Error('鉴权模块未加载，请刷新页面重试');
+    }
+    const apiKey = await ensureApiKey();
+    if (apiKey === null) {
+      throw new Error('请先登录后台');
+    }
+    if (typeof buildAuthHeaders === 'function') {
+      return buildAuthHeaders(apiKey);
+    }
+    return apiKey ? { Authorization: apiKey } : {};
+  }
+
   async function startSession() {
     if (!ensureLiveKit()) {
       return;
     }
 
     try {
-      const apiKey = await ensureApiKey();
-      if (apiKey === null) {
-        toast('请先登录后台', 'error');
-        return;
-      }
-
       startBtn.disabled = true;
+      const headers = await resolveAuthHeaders();
       updateMeta();
       setStatus('connecting', '正在连接');
       log('正在获取 Token...');
@@ -145,9 +160,7 @@
         speed: speedRange.value
       });
 
-      const headers = buildAuthHeaders(apiKey);
-
-      const response = await fetch(`/api/v1/admin/voice/token?${params.toString()}`, {
+      const response = await fetch(`${voiceTokenEndpoint}?${params.toString()}`, {
         headers
       });
 

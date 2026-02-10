@@ -229,6 +229,12 @@ async def public_imagine_page():
     return await render_template("imagine/public.html")
 
 
+@router.get("/voice", response_class=HTMLResponse, include_in_schema=False)
+async def public_voice_page():
+    """公开的 Voice Live 页面（不需要登录）"""
+    return await render_template("voice/public.html")
+
+
 @router.get("/admin", response_class=HTMLResponse, include_in_schema=False)
 async def admin_login_page():
     """管理后台登录页"""
@@ -266,17 +272,12 @@ class VoiceTokenResponse(BaseModel):
     room_name: str = ""
 
 
-@router.get(
-    "/api/v1/admin/voice/token",
-    dependencies=[Depends(verify_api_key)],
-    response_model=VoiceTokenResponse,
-)
-async def admin_voice_token(
+async def _build_voice_token_response(
     voice: str = "ara",
     personality: str = "assistant",
     speed: float = 1.0,
-):
-    """获取 Grok Voice Mode (LiveKit) Token"""
+) -> VoiceTokenResponse:
+    """获取 Grok Voice Mode (LiveKit) Token 并返回统一响应结构"""
     token_mgr = await get_token_manager()
     sso_token = None
     for pool_name in ("ssoBasic", "ssoSuper"):
@@ -313,7 +314,6 @@ async def admin_voice_token(
             participant_name="",
             room_name="",
         )
-
     except Exception as e:
         if isinstance(e, AppException):
             raise
@@ -322,6 +322,38 @@ async def admin_voice_token(
             code="voice_error",
             status_code=500,
         )
+
+
+@router.get(
+    "/api/v1/admin/voice/token",
+    dependencies=[Depends(verify_api_key)],
+    response_model=VoiceTokenResponse,
+)
+async def admin_voice_token(
+    voice: str = "ara",
+    personality: str = "assistant",
+    speed: float = 1.0,
+):
+    """获取 Grok Voice Mode (LiveKit) Token"""
+    return await _build_voice_token_response(
+        voice=voice,
+        personality=personality,
+        speed=speed,
+    )
+
+
+@router.get("/api/v1/voice/token", response_model=VoiceTokenResponse)
+async def public_voice_token(
+    voice: str = "ara",
+    personality: str = "assistant",
+    speed: float = 1.0,
+):
+    """公开的 Voice Token 接口（不需要登录）"""
+    return await _build_voice_token_response(
+        voice=voice,
+        personality=personality,
+        speed=speed,
+    )
 
 
 async def _verify_imagine_ws_auth(websocket: WebSocket) -> tuple[bool, Optional[str]]:
