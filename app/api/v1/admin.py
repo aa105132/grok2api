@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from app.core.auth import verify_api_key, verify_app_key, get_admin_api_key
 from app.core.config import config, get_config
 from app.core.batch_tasks import create_task, get_task, expire_task
-from app.core.storage import get_storage, LocalStorage, RedisStorage, SQLStorage
+from app.core.storage import get_storage, LocalStorage, RedisStorage, SQLStorage, DATA_DIR
 from app.core.exceptions import AppException
 from app.services.token.manager import get_token_manager
 from app.services.grok.utils.batch import run_in_batches
@@ -37,7 +37,7 @@ from app.services.grok.models.model import ModelService
 from app.services.grok.processors.image_ws_processors import ImageWSCollectProcessor
 from app.services.grok.processors import ImageCollectProcessor
 from app.services.token import EffortType
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote
 
 TEMPLATE_DIR = Path(__file__).parent.parent.parent / "static"
 
@@ -2194,6 +2194,51 @@ async def enable_nsfw_api_async(data: dict):
     }
 
 
+def _local_cache_dir(cache_type: str) -> Path:
+    cache_type = str(cache_type or "").strip().lower()
+    if cache_type not in {"image", "video"}:
+        raise HTTPException(status_code=400, detail="Invalid cache type")
+    return DATA_DIR / "tmp" / cache_type
+
+
+def _local_cache_stats(cache_type: str) -> dict:
+    folder = _local_cache_dir(cache_type)
+    if not folder.exists():
+        return {"count": 0, "size_mb": 0.0}
+
+    count = 0
+    total_size = 0
+    for item in folder.iterdir():
+        if item.is_file():
+            count += 1
+            total_size += item.stat().st_size
+
+    return {"count": count, "size_mb": round(total_size / (1024 * 1024), 2)}
+
+
+def _list_local_cache_items(cache_type: str) -> list[dict]:
+    folder = _local_cache_dir(cache_type)
+    if not folder.exists():
+        return []
+
+    items = []
+    for item in folder.iterdir():
+        if not item.is_file():
+            continue
+        st = item.stat()
+        row = {
+            "name": item.name,
+            "size_bytes": st.st_size,
+            "mtime_ms": int(st.st_mtime * 1000),
+        }
+        if cache_type == "image":
+            row["preview_url"] = f"/v1/files/image/{quote(item.name)}"
+        items.append(row)
+
+    items.sort(key=lambda x: x.get("mtime_ms", 0), reverse=True)
+    return items
+
+
 @router.get("/admin/cache", response_class=HTMLResponse, include_in_schema=False)
 async def admin_cache_page():
     """缓存管理页"""
@@ -2208,9 +2253,8 @@ async def get_cache_stats_api(request: Request):
     from app.services.grok.utils.batch import run_in_batches
 
     try:
-        # 本地缓存已禁用，返回空统计
-        image_stats = {"count": 0, "size_mb": 0.0}
-        video_stats = {"count": 0, "size_mb": 0.0}
+        image_stats = _local_cache_stats("image")
+        video_stats = _local_cache_stats("video")
 
         mgr = await get_token_manager()
         pools = mgr.pools
@@ -2477,9 +2521,8 @@ async def load_online_cache_api_async(data: dict):
 
     async def _run():
         try:
-            # 本地缓存已禁用，返回空统计
-            image_stats = {"count": 0, "size_mb": 0.0}
-            video_stats = {"count": 0, "size_mb": 0.0}
+            image_stats = _local_cache_stats("image")
+            video_stats = _local_cache_stats("video")
 
             async def _fetch_detail(token: str):
                 account = account_map.get(token)
@@ -2573,11 +2616,32 @@ async def load_online_cache_api_async(data: dict):
 
 @router.post("/api/v1/admin/cache/clear", dependencies=[Depends(verify_api_key)])
 async def clear_local_cache_api(data: dict):
-    """清理本地缓存 - 已禁用"""
+    """清理本地缓存"""
+    cache_type = str((data or {}).get("type") or "image").strip().lower()
+    folder = _local_cache_dir(cache_type)
+
+    removed = 0
+    released_bytes = 0
+
+    if folder.exists():
+        for item in folder.iterdir():
+            if not item.is_file():
+                continue
+            try:
+                size = item.stat().st_size
+                item.unlink(missing_ok=True)
+                removed += 1
+                released_bytes += size
+            except Exception as e:
+                logger.warning(f"Delete local cache file failed: {item} - {e}")
+
     return {
-        "status": "disabled",
-        "message": "本地缓存功能已禁用，图片/视频直接返回 Grok 资源 URL",
-        "result": {"count": 0, "size_mb": 0.0}
+        "status": "success",
+        "result": {
+            "count": removed,
+            "size_mb": round(released_bytes / (1024 * 1024), 2),
+            "size_bytes": released_bytes,
+        },
     }
 
 
@@ -2588,25 +2652,52 @@ async def list_local_cache_api(
     page: int = 1,
     page_size: int = 1000,
 ):
-    """列出本地缓存文件 - 已禁用"""
+    """列出本地缓存文件"""
+    selected_type = str(type_ or cache_type or "image").strip().lower()
+    if page < 1:
+        page = 1
+    if page_size < 1:
+        page_size = 1
+    if page_size > 5000:
+        page_size = 5000
+
+    items = _list_local_cache_items(selected_type)
+    total = len(items)
+    start = (page - 1) * page_size
+    end = start + page_size
+    paged = items[start:end] if start < total else []
+
     return {
-        "status": "disabled",
-        "message": "本地缓存功能已禁用，图片/视频直接返回 Grok 资源 URL",
-        "total": 0,
+        "status": "success",
+        "total": total,
         "page": page,
         "page_size": page_size,
-        "items": []
+        "items": paged,
     }
 
 
 @router.post("/api/v1/admin/cache/item/delete", dependencies=[Depends(verify_api_key)])
 async def delete_local_cache_item_api(data: dict):
-    """删除单个本地缓存文件 - 已禁用"""
-    return {
-        "status": "disabled",
-        "message": "本地缓存功能已禁用，图片/视频直接返回 Grok 资源 URL",
-        "result": {"deleted": False}
-    }
+    """删除单个本地缓存文件"""
+    payload = data or {}
+    cache_type = str(payload.get("type") or "image").strip().lower()
+    name = str(payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="File name is required")
+    if any(seg in name for seg in ("..", "/", "\\")):
+        raise HTTPException(status_code=400, detail="Invalid file name")
+
+    folder = _local_cache_dir(cache_type)
+    target = folder / name
+    if not target.exists() or not target.is_file():
+        return {"status": "success", "result": {"deleted": False}}
+
+    try:
+        target.unlink()
+        return {"status": "success", "result": {"deleted": True}}
+    except Exception as e:
+        logger.warning(f"Delete local cache item failed: {target} - {e}")
+        raise HTTPException(status_code=500, detail="Delete failed")
 
 
 @router.post("/api/v1/admin/cache/online/clear", dependencies=[Depends(verify_api_key)])

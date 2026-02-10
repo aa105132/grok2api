@@ -109,14 +109,12 @@ class ImageWSBaseProcessor(BaseProcessor):
                 hd_b64 = await self._download_from_url(url, image_id)
                 if hd_b64:
                     if self.response_format == "url":
-                        # 直接返回 Grok 资源 URL，不保存本地
-                        return url if url.startswith("http") else f"https://assets.grok.com{url}"
+                        return await self.process_url(url, "image")
                     return hd_b64
 
             if self.response_format == "url":
-                # URL 模式：直接返回 Grok 资源 URL，不保存本地
                 if url:
-                    return url if url.startswith("http") else f"https://assets.grok.com{url}"
+                    return await self.process_url(url, "image")
                 # 如果没有 URL 但有 blob，无法提供 URL，返回空字符串
                 logger.warning(f"No URL available for image {image_id} in url mode")
                 return ""
