@@ -1,4 +1,4 @@
-(() => {
+﻿(() => {
   const startBtn = document.getElementById('startBtn');
   const stopBtn = document.getElementById('stopBtn');
   const clearBtn = document.getElementById('clearBtn');
@@ -20,7 +20,7 @@
   const lightboxImg = document.getElementById('lightboxImg');
   const closeLightbox = document.getElementById('closeLightbox');
 
-  // 图生图相关元素
+  // 鍥剧敓鍥剧浉鍏冲厓绱?
   const genModeButtons = document.querySelectorAll('.gen-mode-btn');
   const imageUploadSection = document.getElementById('imageUploadSection');
   const imageDropZone = document.getElementById('imageDropZone');
@@ -44,9 +44,9 @@
   let isSelectionMode = false;
   let selectedImages = new Set();
 
-  // 图生图状态
+  // 鍥剧敓鍥剧姸鎬?
   let generationMode = 'generate'; // 'generate' or 'edit'
-  let uploadedImages = []; // 存储上传的图片 base64
+  let uploadedImages = []; // 瀛樺偍涓婁紶鐨勫浘鐗?base64
 
   function toast(message, type) {
     if (typeof showToast === 'function') {
@@ -132,7 +132,7 @@
 
   function updateError(value) {}
 
-  // 生成模式切换
+  // 鐢熸垚妯″紡鍒囨崲
   function setGenerationMode(mode) {
     if (!['generate', 'edit'].includes(mode)) return;
     generationMode = mode;
@@ -145,7 +145,7 @@
       }
     });
 
-    // 显示/隐藏图片上传区域
+    // 鏄剧ず/闅愯棌鍥剧墖涓婁紶鍖哄煙
     if (imageUploadSection) {
       if (mode === 'edit') {
         imageUploadSection.classList.remove('hidden');
@@ -154,17 +154,17 @@
       }
     }
 
-    // 更新提示词 placeholder
+    // 鏇存柊鎻愮ず璇?placeholder
     if (promptInput) {
       if (mode === 'edit') {
-        promptInput.placeholder = '描述你想要对图片进行的修改，例如：将背景改为海滩';
+        promptInput.placeholder = '鎻忚堪浣犳兂瑕佸鍥剧墖杩涜鐨勪慨鏀癸紝渚嬪锛氬皢鑳屾櫙鏀逛负娴锋哗';
       } else {
-        promptInput.placeholder = '描述你想要的画面，例如：未来城市霓虹雨夜，广角摄影';
+        promptInput.placeholder = 'Describe the image you want to generate.';
       }
     }
   }
 
-  // 图片上传处理
+  // 鍥剧墖涓婁紶澶勭悊
   function handleImageFiles(files) {
     const maxImages = 4;
     const allowedTypes = ['image/png', 'image/jpeg', 'image/webp'];
@@ -172,17 +172,17 @@
 
     for (const file of files) {
       if (uploadedImages.length >= maxImages) {
-        toast(`最多只能上传 ${maxImages} 张图片`, 'warning');
+        toast('Max ' + maxImages + ' reference images allowed', 'warning');
         break;
       }
 
       if (!allowedTypes.includes(file.type)) {
-        toast(`不支持的图片格式: ${file.name}`, 'error');
+        toast(`涓嶆敮鎸佺殑鍥剧墖鏍煎紡: ${file.name}`, 'error');
         continue;
       }
 
       if (file.size > maxSize) {
-        toast(`图片太大: ${file.name}`, 'error');
+        toast(`鍥剧墖澶ぇ: ${file.name}`, 'error');
         continue;
       }
 
@@ -206,7 +206,7 @@
 
       const img = document.createElement('img');
       img.src = dataUrl;
-      img.alt = `预览图 ${index + 1}`;
+      img.alt = `棰勮鍥?${index + 1}`;
 
       const removeBtn = document.createElement('button');
       removeBtn.className = 'remove-btn';
@@ -223,7 +223,7 @@
     });
   }
 
-  // 初始化图片上传区域
+  // 鍒濆鍖栧浘鐗囦笂浼犲尯鍩?
   if (imageDropZone && imageFileInput) {
     imageDropZone.addEventListener('click', () => {
       imageFileInput.click();
@@ -255,7 +255,7 @@
     });
   }
 
-  // 初始化生成模式切换按钮
+  // 鍒濆鍖栫敓鎴愭ā寮忓垏鎹㈡寜閽?
   if (genModeButtons.length > 0) {
     genModeButtons.forEach(btn => {
       btn.addEventListener('click', () => {
@@ -472,16 +472,16 @@
       appendImage(data.b64_json, data);
     } else if (data.type === 'status') {
       if (data.status === 'running') {
-        setStatus('connected', '生成中');
+        setStatus('connected', 'Generating');
         lastRunId = data.run_id || '';
       } else if (data.status === 'stopped') {
         if (data.run_id && lastRunId && data.run_id !== lastRunId) {
           return;
         }
-        setStatus('', '已停止');
+        setStatus('', 'Stopped');
       }
     } else if (data.type === 'error') {
-      const message = data.message || '生成失败';
+      const message = data.message || '鐢熸垚澶辫触';
       updateError(message);
       toast(message, 'error');
     }
@@ -533,9 +533,9 @@
     stopAllConnections();
     updateModeValue();
 
-    setStatus('connected', '生成中 (SSE)');
+    setStatus('connected', '鐢熸垚涓?(SSE)');
     setButtons(true);
-    toast(`已启动 ${taskIds.length} 个并发任务 (SSE)`, 'success');
+    toast(`宸插惎鍔?${taskIds.length} 涓苟鍙戜换鍔?(SSE)`, 'success');
 
     for (let i = 0; i < taskIds.length; i++) {
       const url = buildSseUrl(taskIds[i], i);
@@ -553,7 +553,7 @@
         updateActive();
         const remaining = sseConnections.filter(e => e && e.readyState === EventSource.OPEN).length;
         if (remaining === 0) {
-          setStatus('error', '连接错误');
+          setStatus('error', '杩炴帴閿欒');
           setButtons(false);
           isRunning = false;
           startBtn.disabled = false;
@@ -568,13 +568,13 @@
   async function startConnection() {
     const prompt = promptInput ? promptInput.value.trim() : '';
     if (!prompt) {
-      toast('请输入提示词', 'error');
+      toast('璇疯緭鍏ユ彁绀鸿瘝', 'error');
       return;
     }
 
-    // 图生图模式检查
+    // 鍥剧敓鍥炬ā寮忔鏌?
     if (generationMode === 'edit' && uploadedImages.length === 0) {
-      toast('请先上传参考图片', 'error');
+      toast('Please upload reference images first', 'error');
       return;
     }
 
@@ -582,12 +582,12 @@
     const ratio = ratioSelect ? ratioSelect.value : '2:3';
 
     if (isRunning) {
-      toast('已在运行中', 'warning');
+      toast('Generation is already running', 'warning');
       return;
     }
 
     isRunning = true;
-    setStatus('connecting', '连接中');
+    setStatus('connecting', 'Connecting');
     startBtn.disabled = true;
 
     if (pendingFallbackTimer) {
@@ -599,15 +599,14 @@
     try {
       taskIds = await createImagineTasks(prompt, ratio, concurrent, generationMode, uploadedImages);
     } catch (e) {
-      setStatus('error', '创建任务失败');
-      toast(e.message || '创建任务失败', 'error');
+      setStatus('error', '鍒涘缓浠诲姟澶辫触');
+      toast(e.message || '鍒涘缓浠诲姟澶辫触', 'error');
       startBtn.disabled = false;
       isRunning = false;
       return;
     }
     currentTaskIds = taskIds;
 
-    // 仅在用户明确选择 SSE 时强制使用 SSE
     if (modePreference === 'sse') {
       startSSE(taskIds);
       return;
@@ -641,9 +640,9 @@
         opened += 1;
         updateActive();
         if (i === 0) {
-          setStatus('connected', '生成中');
+          setStatus('connected', 'Generating');
           setButtons(true);
-          toast(`已启动 ${concurrent} 个并发任务`, 'success');
+          toast('Started ' + concurrent + ' concurrent tasks', 'success');
         }
         sendStart(prompt, ws);
       };
@@ -659,7 +658,7 @@
         }
         const remaining = wsConnections.filter(w => w && w.readyState === WebSocket.OPEN).length;
         if (remaining === 0 && !fallbackDone) {
-          setStatus('', '未连接');
+          setStatus('', 'Disconnected');
           setButtons(false);
           isRunning = false;
           updateModeValue();
@@ -677,7 +676,7 @@
           return;
         }
         if (i === 0 && wsConnections.filter(w => w && w.readyState === WebSocket.OPEN).length === 0) {
-          setStatus('error', '连接错误');
+          setStatus('error', '杩炴帴閿欒');
           startBtn.disabled = false;
           isRunning = false;
           updateModeValue();
@@ -699,8 +698,9 @@
       aspect_ratio: ratio,
       mode: generationMode,
     };
-    // Images are already stored in task session by /api/v1/imagine/start.
-    // Avoid sending large base64 payload again over WebSocket.
+    if (generationMode === 'edit' && uploadedImages.length > 0) {
+      payload.images = uploadedImages;
+    }
     ws.send(JSON.stringify(payload));
     updateError('');
   }
@@ -721,7 +721,7 @@
     updateActive();
     updateModeValue();
     setButtons(false);
-    setStatus('', '未连接');
+    setStatus('', 'Disconnected');
   }
 
   function clearImages() {
@@ -822,10 +822,10 @@
             folderPath.textContent = directoryHandle.name;
             selectFolderBtn.style.color = '#059669';
           }
-          toast('已选择文件夹: ' + directoryHandle.name, 'success');
+          toast('宸查€夋嫨鏂囦欢澶? ' + directoryHandle.name, 'success');
         } catch (e) {
           if (e.name !== 'AbortError') {
-            toast('选择文件夹失败', 'error');
+            toast('Failed to select folder', 'error');
           }
         }
       });
@@ -843,7 +843,7 @@
     });
   }
 
-  // Collapsible cards - 点击"连接状态"标题控制所有卡片
+  // Collapsible cards - 鐐瑰嚮"杩炴帴鐘舵€?鏍囬鎺у埗鎵€鏈夊崱鐗?
   const statusToggle = document.getElementById('statusToggle');
 
   if (statusToggle) {
@@ -927,7 +927,7 @@
     if (toggleSelectAllBtn) {
       const items = document.querySelectorAll('.waterfall-item');
       const allSelected = items.length > 0 && selectedImages.size === items.length;
-      toggleSelectAllBtn.textContent = allSelected ? '取消全选' : '全选';
+      toggleSelectAllBtn.textContent = allSelected ? 'Deselect All' : 'Select All';
     }
   }
   
@@ -954,18 +954,18 @@
   
   async function downloadSelectedImages() {
     if (selectedImages.size === 0) {
-      toast('请先选择要下载的图片', 'warning');
+      toast('璇峰厛閫夋嫨瑕佷笅杞界殑鍥剧墖', 'warning');
       return;
     }
     
     if (typeof JSZip === 'undefined') {
-      toast('JSZip 库加载失败，请刷新页面重试', 'error');
+      toast('Failed to load JSZip, please refresh and try again', 'error');
       return;
     }
     
-    toast(`正在打包 ${selectedImages.size} 张图片...`, 'info');
+    toast(`姝ｅ湪鎵撳寘 ${selectedImages.size} 寮犲浘鐗?..`, 'info');
     downloadSelectedBtn.disabled = true;
-    downloadSelectedBtn.textContent = '打包中...';
+    downloadSelectedBtn.textContent = '鎵撳寘涓?..';
     
     const zip = new JSZip();
     const imgFolder = zip.folder('images');
@@ -992,19 +992,19 @@
           processed++;
           
           // Update progress
-          downloadSelectedBtn.innerHTML = `打包中... (${processed}/${selectedImages.size})`;
+          downloadSelectedBtn.innerHTML = `鎵撳寘涓?.. (${processed}/${selectedImages.size})`;
         } catch (error) {
           console.error('Failed to fetch image:', error);
         }
       }
       
       if (processed === 0) {
-        toast('没有成功获取任何图片', 'error');
+        toast('娌℃湁鎴愬姛鑾峰彇浠讳綍鍥剧墖', 'error');
         return;
       }
       
       // Generate zip file
-      downloadSelectedBtn.textContent = '生成压缩包...';
+      downloadSelectedBtn.textContent = '鐢熸垚鍘嬬缉鍖?..';
       const content = await zip.generateAsync({ type: 'blob' });
       
       // Download zip
@@ -1014,14 +1014,14 @@
       link.click();
       URL.revokeObjectURL(link.href);
       
-      toast(`成功打包 ${processed} 张图片`, 'success');
+      toast('Packed ' + processed + ' images successfully', 'success');
       exitSelectionMode();
     } catch (error) {
       console.error('Download failed:', error);
-      toast('打包失败，请重试', 'error');
+      toast('鎵撳寘澶辫触锛岃閲嶈瘯', 'error');
     } finally {
     downloadSelectedBtn.disabled = false;
-    downloadSelectedBtn.innerHTML = `下载 <span id="selectedCount" class="selected-count">${selectedImages.size}</span>`;
+    downloadSelectedBtn.innerHTML = `涓嬭浇 <span id="selectedCount" class="selected-count">${selectedImages.size}</span>`;
     }
   }
   
@@ -1197,3 +1197,4 @@
     });
   }
 })();
+
