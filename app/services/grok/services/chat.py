@@ -300,7 +300,11 @@ class GrokChatService:
         # 重试机制
         def extract_status(e: Exception) -> int | None:
             if isinstance(e, UpstreamException) and e.details:
-                return e.details.get("status")
+                status = e.details.get("status")
+                # 429 不在内层重试，由外层跨 token 重试处理
+                if status == 429:
+                    return None
+                return status
             return None
 
         session = None
@@ -426,7 +430,7 @@ class ChatService:
         think = {"enabled": True, "disabled": False}.get(thinking)
         is_stream = stream if stream is not None else get_config("chat.stream")
 
-        # 构造请求
+        # 构造请求（只需构造一次）
         chat_request = ChatRequest(
             model=model, messages=messages, stream=is_stream, think=think
         )
@@ -444,13 +448,13 @@ class ChatService:
 
         response, _, model_name = await service.chat_openai(token, chat_request)
 
-        # 处理响应
-        if is_stream:
-            logger.debug(f"Processing stream response: model={model}")
-            processor = StreamProcessor(model_name, token, think)
-            return wrap_stream_with_usage(
-                processor.process(response), token_mgr, token, model
-            )
+        for attempt in range(max_token_retries):
+            # 选择 token（排除已失败的）
+            token = None
+            for pool_name in ModelService.pool_candidates_for_model(model):
+                token = token_mgr.get_token(pool_name, exclude=tried_tokens)
+                if token:
+                    break
 
         # 非流式
         logger.debug(f"Processing non-stream response: model={model}")

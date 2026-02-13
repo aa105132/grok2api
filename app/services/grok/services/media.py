@@ -160,6 +160,14 @@ class VideoService:
             "message": f"{prompt} {mode_flag}",
             "toolOverrides": {"videoGen": True},
             "enableSideBySide": True,
+            "deviceEnvInfo": {
+                "darkModeEnabled": False,
+                "devicePixelRatio": 2,
+                "screenWidth": 1920,
+                "screenHeight": 1080,
+                "viewportWidth": 1920,
+                "viewportHeight": 1080,
+            },
             "responseMetadata": {
                 "experiments": [],
                 "modelConfigOverride": {
@@ -168,7 +176,7 @@ class VideoService:
                             "aspectRatio": aspect_ratio,
                             "parentPostId": post_id,
                             "resolutionName": resolution_name,
-                            "videoLength": video_length
+                            "videoLength": video_length,
                         }
                     }
                 },
@@ -295,23 +303,30 @@ class VideoService:
         preset: str = "normal",
     ):
         """视频生成入口"""
-        # 获取 token
+        # 获取 token（使用智能路由）
         token_mgr = await get_token_manager()
         await token_mgr.reload_if_stale()
 
-        token = None
-        for pool_name in ModelService.pool_candidates_for_model(model):
-            token = token_mgr.get_token(pool_name)
-            if token:
-                break
+        # 使用智能路由选择 token（根据视频需求与候选池）
+        pool_candidates = ModelService.pool_candidates_for_model(model)
+        token_info = token_mgr.get_token_for_video(
+            resolution=resolution,
+            video_length=video_length,
+            pool_candidates=pool_candidates,
+        )
 
-        if not token:
+        if not token_info:
             raise AppException(
                 message="No available tokens. Please try again later.",
                 error_type=ErrorType.RATE_LIMIT.value,
                 code="rate_limit_exceeded",
                 status_code=429,
             )
+
+        # 从 TokenInfo 对象中提取 token 字符串
+        token = token_info.token
+        if token.startswith("sso="):
+            token = token[4:]
 
         think = {"enabled": True, "disabled": False}.get(thinking)
         is_stream = stream if stream is not None else get_config("chat.stream")
