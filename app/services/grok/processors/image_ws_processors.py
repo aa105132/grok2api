@@ -100,20 +100,35 @@ class ImageWSBaseProcessor(BaseProcessor):
             final_min_bytes = get_config("image.image_ws_final_min_bytes")
             blob_is_final_quality = blob_size >= final_min_bytes
 
+            # 标记是否尝试过下载HD版本
+            hd_download_attempted = False
+            hd_b64 = None
+
             # 对于 final 图片，如果 blob 不是 final 质量，优先通过 URL 下载高质量版本
             if is_final and url and not blob_is_final_quality:
                 logger.info(
                     f"Final image {image_id} has low-quality blob ({blob_size} bytes), "
                     f"downloading HD from URL: {url[:80]}"
                 )
+                hd_download_attempted = True
                 hd_b64 = await self._download_from_url(url, image_id)
                 if hd_b64:
                     if self.response_format == "url":
                         return await self.process_url(url, "image")
                     return hd_b64
+                # 下载失败，fallback 到使用现有的 blob（如果有的话）
+                if blob:
+                    logger.info(
+                        f"HD download failed for {image_id}, using available blob ({blob_size} bytes)"
+                    )
+                    # 继续执行下面的逻辑使用 blob
 
             if self.response_format == "url":
                 if url:
+                    # 如果之前尝试下载HD失败,直接返回上游URL,避免重复重试
+                    if hd_download_attempted and not hd_b64:
+                        logger.info(f"Returning upstream URL for {image_id} (HD download failed)")
+                        return url
                     return await self.process_url(url, "image")
                 # 如果没有 URL 但有 blob，无法提供 URL，返回空字符串
                 logger.warning(f"No URL available for image {image_id} in url mode")
