@@ -141,7 +141,14 @@ class ImageWSBaseProcessor(BaseProcessor):
             # blob 为空，尝试通过 URL 下载并转 base64
             if url:
                 logger.info(f"Blob empty for {image_id}, downloading from URL: {url[:80]}")
-                return await self._download_from_url(url, image_id)
+                downloaded_b64 = await self._download_from_url(url, image_id)
+                if downloaded_b64:
+                    return downloaded_b64
+                # 下载失败，返回上游 URL 作为 fallback
+                logger.warning(
+                    f"Failed to get base64 for {image_id}, returning upstream URL as fallback"
+                )
+                return f"https://assets.grok.com{url}" if url.startswith("/") else url
             return ""
         except Exception as e:
             logger.warning(f"Image output failed: {e}")

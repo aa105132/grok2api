@@ -20,6 +20,25 @@ class _DummySession:
         return _DummyResponse()
 
 
+class _StatusResponse:
+    def __init__(self, status_code=200, content=b"abc", content_type="image/jpeg"):
+        self.status_code = status_code
+        self.content = content
+        self.headers = {"content-type": content_type}
+
+
+class _QueueSession:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.urls = []
+
+    async def get(self, url, **kwargs):
+        self.urls.append(url)
+        if self.responses:
+            return self.responses.pop(0)
+        return _StatusResponse(status_code=404, content=b"", content_type="text/plain")
+
+
 def test_collect_image_urls_supports_content_paths():
     payload = {
         "generatedImageUrls": [
@@ -66,4 +85,50 @@ def test_to_base64_accepts_absolute_assets_url():
     result = asyncio.run(_run())
 
     assert dummy.last_url == "https://assets.grok.com/users/u1/generated/a5/image.jpg?x=1"
+    assert result.startswith("data:image/jpeg;base64,")
+
+
+def test_to_base64_imagine_public_prefers_grok_domain():
+    dummy = _QueueSession([_StatusResponse(status_code=200)])
+    svc = DownloadService()
+
+    async def _fake_get_session():
+        return dummy
+
+    async def _run():
+        await config.load()
+        svc._get_session = _fake_get_session  # type: ignore[method-assign]
+        svc._build_headers = lambda *args, **kwargs: {}  # type: ignore[method-assign]
+        return await svc.to_base64("/imagine-public/images/demo.jpg", "token")
+
+    result = asyncio.run(_run())
+
+    assert dummy.urls == ["https://grok.com/imagine-public/images/demo.jpg"]
+    assert result.startswith("data:image/jpeg;base64,")
+
+
+def test_to_base64_imagine_public_fallback_to_assets_domain():
+    dummy = _QueueSession(
+        [
+            _StatusResponse(status_code=404, content=b"", content_type="text/plain"),
+            _StatusResponse(status_code=200, content=b"abc", content_type="image/jpeg"),
+        ]
+    )
+    svc = DownloadService()
+
+    async def _fake_get_session():
+        return dummy
+
+    async def _run():
+        await config.load()
+        svc._get_session = _fake_get_session  # type: ignore[method-assign]
+        svc._build_headers = lambda *args, **kwargs: {}  # type: ignore[method-assign]
+        return await svc.to_base64("/imagine-public/images/demo.jpg", "token")
+
+    result = asyncio.run(_run())
+
+    assert dummy.urls == [
+        "https://grok.com/imagine-public/images/demo.jpg",
+        "https://assets.grok.com/imagine-public/images/demo.jpg",
+    ]
     assert result.startswith("data:image/jpeg;base64,")

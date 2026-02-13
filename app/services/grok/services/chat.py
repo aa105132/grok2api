@@ -36,6 +36,51 @@ from app.services.grok.processors import ImageStreamProcessor, ImageCollectProce
 CHAT_API = "https://grok.com/rest/app-chat/conversations/new"
 
 
+def _extract_sse_data_payload(sse_msg: str) -> Dict[str, Any]:
+    """从 SSE 文本中提取首个 data JSON。"""
+    data_line = ""
+    for line in sse_msg.splitlines():
+        if line.startswith("data: "):
+            data_line = line[6:].strip()
+            break
+
+    if not data_line:
+        return {}
+
+    try:
+        payload = orjson.loads(data_line)
+    except orjson.JSONDecodeError:
+        return {}
+
+    return payload if isinstance(payload, dict) else {}
+
+
+def _build_chat_image_markdown(payload: Dict[str, Any]) -> str:
+    """将图片 payload 统一转换为 chat markdown。"""
+    raw = payload.get("b64_json")
+    if raw is None:
+        raw = payload.get("base64")
+
+    if raw:
+        value = str(raw).strip()
+        if not value:
+            return ""
+        img_id = str(uuid.uuid4())[:8]
+        # base64 字段偶尔会回退成 URL，这里统一兜底处理。
+        if value.startswith("http") or value.startswith("/") or value.startswith("data:"):
+            return f"![{img_id}]({value})\n"
+        return f"![{img_id}](data:image/jpeg;base64,{value})\n"
+
+    url = payload.get("url")
+    if url:
+        url_value = str(url).strip()
+        if url_value:
+            img_id = str(uuid.uuid4())[:8]
+            return f"![{img_id}]({url_value})\n"
+
+    return ""
+
+
 @dataclass
 class ChatRequest:
     """聊天请求数据"""
@@ -508,28 +553,13 @@ class ChatService:
                             continue
                         
                         if sse_msg.startswith("event: image_generation.completed"):
-                            # 提取 b64_json 或 url 并包装成 chat.completion.chunk
+                            # 提取图片 payload 并包装成 chat.completion.chunk
                             try:
-                                # 处理可能包含多行的情况
-                                data_line = ""
-                                for line in sse_msg.splitlines():
-                                    if line.startswith("data: "):
-                                        data_line = line[6:].strip()
-                                        break
-                                
-                                if not data_line:
+                                data = _extract_sse_data_payload(sse_msg)
+                                if not data:
                                     continue
-                                
-                                data = orjson.loads(data_line)
-                                
-                                content = ""
-                                if b64 := data.get("b64_json"):
-                                    img_id = str(uuid.uuid4())[:8]
-                                    content = f"![{img_id}](data:image/jpeg;base64,{b64})\n"
-                                elif url := data.get("url"):
-                                    img_id = str(uuid.uuid4())[:8]
-                                    content = f"![{img_id}]({url})\n"
-                                
+
+                                content = _build_chat_image_markdown(data)
                                 if content:
                                     chunk = {
                                         "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",
@@ -739,24 +769,11 @@ class ChatService:
                     
                     if sse_msg.startswith("event: image_generation.completed"):
                         try:
-                            data_line = ""
-                            for line in sse_msg.splitlines():
-                                if line.startswith("data: "):
-                                    data_line = line[6:].strip()
-                                    break
-                            
-                            if not data_line:
+                            data = _extract_sse_data_payload(sse_msg)
+                            if not data:
                                 continue
-                            
-                            data = orjson.loads(data_line)
-                            content = ""
-                            if b64 := data.get("b64_json"):
-                                img_id = str(uuid.uuid4())[:8]
-                                content = f"![{img_id}](data:image/jpeg;base64,{b64})\n"
-                            elif url := data.get("url"):
-                                img_id = str(uuid.uuid4())[:8]
-                                content = f"![{img_id}]({url})\n"
-                            
+
+                            content = _build_chat_image_markdown(data)
                             if content:
                                 chunk = {
                                     "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",

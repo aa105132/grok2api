@@ -505,6 +505,8 @@ class DownloadService(BaseService):
             if not raw_input:
                 raise ValidationException("Invalid file path: empty path")
 
+            candidate_urls: list[str] = []
+
             # Accept both relative asset paths and absolute URLs.
             if self.is_url(raw_input):
                 parsed = urlparse(raw_input)
@@ -516,41 +518,52 @@ class DownloadService(BaseService):
                 # Keep canonical assets host for assets URLs; otherwise fetch directly.
                 if host.endswith("assets.grok.com"):
                     file_path = path
-                    url = f"{DOWNLOAD_API}{file_path}"
+                    candidate_urls.append(f"{DOWNLOAD_API}{file_path}")
                 else:
                     file_path = path
-                    url = raw_input
+                    candidate_urls.append(raw_input)
             else:
                 file_path = raw_input if raw_input.startswith("/") else f"/{raw_input}"
-                url = f"{DOWNLOAD_API}{file_path}"
+                # imagine-public 资源在 grok.com 下，优先走主站下载。
+                if file_path.startswith("/imagine-public/"):
+                    candidate_urls.append(f"https://grok.com{file_path}")
+                candidate_urls.append(f"{DOWNLOAD_API}{file_path}")
+
+            if not candidate_urls:
+                raise ValidationException("Invalid file path: no download candidates")
             headers = self._build_headers(token, download=True)
 
             async with _get_assets_semaphore():
                 session = await self._get_session()
-                response = await session.get(
-                    url,
-                    headers=headers,
-                    proxies=self.config.get_proxies(),
-                    timeout=self.config.timeout,
-                    allow_redirects=True,
-                    impersonate=self.config.browser,
-                )
-
-                if response.status_code != 200:
-                    raise UpstreamException(
-                        message=f"Download failed: {response.status_code}",
-                        details={"path": file_path, "status": response.status_code},
+                attempts: list[dict] = []
+                for url in candidate_urls:
+                    response = await session.get(
+                        url,
+                        headers=headers,
+                        proxies=self.config.get_proxies(),
+                        timeout=self.config.timeout,
+                        allow_redirects=True,
+                        impersonate=self.config.browser,
                     )
 
-                # 直接转换为 base64，不保存到本地
-                content = response.content
-                mime = response.headers.get(
-                    "content-type", "application/octet-stream"
-                ).split(";")[0]
-                b64 = base64.b64encode(content).decode()
+                    if response.status_code == 200:
+                        # 直接转换为 base64，不保存到本地
+                        content = response.content
+                        mime = response.headers.get(
+                            "content-type", "application/octet-stream"
+                        ).split(";")[0]
+                        b64 = base64.b64encode(content).decode()
 
-                logger.debug(f"Downloaded and converted to base64: {file_path}")
-                return f"data:{mime};base64,{b64}"
+                        logger.debug(f"Downloaded and converted to base64: {file_path}")
+                        return f"data:{mime};base64,{b64}"
+
+                    attempts.append({"url": url, "status": response.status_code})
+
+                last_status = attempts[-1]["status"] if attempts else "unknown"
+                raise UpstreamException(
+                    message=f"Download failed: {last_status}",
+                    details={"path": file_path, "attempts": attempts},
+                )
         except Exception as e:
             logger.error(f"Failed to convert {file_path} to base64: {e}")
             raise

@@ -228,9 +228,13 @@ class ImageService:
                             msg_type = msg.get("type")
 
                             if msg_type == "image":
-                                info = self._classify_image(
-                                    msg.get("url", ""), msg.get("blob", "")
+                                blob_data = msg.get("blob", "")
+                                url_data = msg.get("url", "")
+                                logger.debug(
+                                    f"WebSocket image: url={url_data[:80] if url_data else 'None'}, "
+                                    f"blob_size={len(blob_data)} bytes"
                                 )
+                                info = self._classify_image(url_data, blob_data)
                                 if not info:
                                     continue
 

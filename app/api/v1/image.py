@@ -142,7 +142,16 @@ def resolve_response_format(response_format: Optional[str]) -> str:
     fmt = response_format or get_config("app.image_format")
     if isinstance(fmt, str):
         fmt = fmt.lower()
-    if fmt in ("b64_json", "base64", "url"):
+
+    # 临时修复:由于 Grok 图片 URL 经常404,强制使用 b64_json
+    if fmt == "url":
+        logger.warning(
+            "response_format='url' is currently unstable due to Grok CDN delays, "
+            "forcing to 'b64_json'"
+        )
+        fmt = "b64_json"
+
+    if fmt in ("b64_json", "base64"):
         return fmt
     raise ValidationException(
         message="response_format must be one of b64_json, base64, url",

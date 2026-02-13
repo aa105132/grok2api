@@ -310,6 +310,9 @@ class BaseProcessor:
                     logger.warning(
                         f"Cache asset failed after {max_retries} attempts, fallback to upstream URL: {e}"
                     )
+                    # imagine-public 资源不在 assets.grok.com，fallback 时保留正确主机。
+                    if normalized_path.startswith("/imagine-public/"):
+                        return f"https://grok.com{normalized_path}"
                     return f"{ASSET_URL.rstrip('/')}{normalized_path}"
 
 
