@@ -148,11 +148,11 @@ class ImageWSBaseProcessor(BaseProcessor):
             return ""
 
     async def _download_from_url(self, url: str, image_id: str) -> str:
-        """异步下载 URL 并转 base64（用于 blob 为空时 fallback）"""
+        """异步下载 URL 并转 base64(用于 blob 为空时 fallback)"""
         import asyncio
 
-        max_retries = 3
-        retry_delays = [1, 2, 3]  # 重试延迟(秒)
+        max_retries = 5
+        retry_delays = [2, 3, 5, 8, 10]  # 增加重试次数和延迟(总共28秒)
 
         for attempt in range(max_retries):
             try:

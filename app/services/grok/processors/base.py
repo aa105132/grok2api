@@ -278,8 +278,8 @@ class BaseProcessor:
                 return self._public_file_url(media_type, existing.name)
 
         # 重试逻辑
-        max_retries = 3
-        retry_delays = [1, 2, 3]  # 重试延迟(秒)
+        max_retries = 5
+        retry_delays = [2, 3, 5, 8, 10]  # 增加重试次数和延迟(总共28秒)
 
         for attempt in range(max_retries):
             try:
