@@ -36,6 +36,42 @@ from app.services.grok.processors import ImageStreamProcessor, ImageCollectProce
 CHAT_API = "https://grok.com/rest/app-chat/conversations/new"
 
 
+def _looks_like_base64_payload(value: str) -> bool:
+    """判断字段值是否更像 base64 数据而非 URL。"""
+    raw = str(value or "").strip()
+    if not raw:
+        return False
+
+    lower = raw.lower()
+    if lower.startswith(("http://", "https://", "data:")):
+        return False
+
+    compact = "".join(raw.split())
+    if not compact:
+        return False
+
+    # 常见文件路径会包含点号，这里直接排除，避免误判 URL/path。
+    if "." in compact:
+        return False
+
+    return bool(re.fullmatch(r"[A-Za-z0-9+/]*={0,2}", compact))
+
+
+def _looks_like_image_url(value: str) -> bool:
+    """判断字段值是否为图片 URL/路径。"""
+    raw = str(value or "").strip()
+    if not raw:
+        return False
+
+    lower = raw.lower()
+    if lower.startswith(("http://", "https://", "data:image/")):
+        return True
+
+    return lower.startswith(
+        ("/v1/files/", "/users/", "users/", "/imagine-public/", "imagine-public/")
+    )
+
+
 def _extract_sse_data_payload(sse_msg: str) -> Dict[str, Any]:
     """从 SSE 文本中提取首个 data JSON。"""
     data_line = ""
@@ -66,9 +102,12 @@ def _build_chat_image_markdown(payload: Dict[str, Any]) -> str:
         if not value:
             return ""
         img_id = str(uuid.uuid4())[:8]
-        # base64 字段偶尔会回退成 URL，这里统一兜底处理。
-        if value.startswith("http") or value.startswith("/") or value.startswith("data:"):
+        # base64 字段偶尔会回退成 URL，这里先判断 URL，再判断 base64。
+        if _looks_like_image_url(value):
             return f"![{img_id}]({value})\n"
+        if _looks_like_base64_payload(value):
+            return f"![{img_id}](data:image/jpeg;base64,{value})\n"
+        # 未知格式优先按 base64 处理，避免把 `/9j...` 误当作 URL。
         return f"![{img_id}](data:image/jpeg;base64,{value})\n"
 
     url = payload.get("url")

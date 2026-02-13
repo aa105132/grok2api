@@ -21,3 +21,9 @@ def test_build_chat_image_markdown_base64_field_with_url_fallback():
 def test_build_chat_image_markdown_from_url():
     content = _build_chat_image_markdown({"url": "/v1/files/image/demo.jpg"})
     assert "(/v1/files/image/demo.jpg)" in content
+
+
+def test_build_chat_image_markdown_jpeg_base64_prefix_not_treated_as_url():
+    # JPEG base64 常见前缀为 /9j，不能被误判成 URL 路径
+    content = _build_chat_image_markdown({"b64_json": "/9j/4AAQSkZJRgABAQAAAQABAAD"})
+    assert "(data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD)" in content

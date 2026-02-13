@@ -148,6 +148,8 @@ class ImageWSBaseProcessor(BaseProcessor):
                 logger.warning(
                     f"Failed to get base64 for {image_id}, returning upstream URL as fallback"
                 )
+                if url.startswith("/imagine-public/"):
+                    return f"https://grok.com{url}"
                 return f"https://assets.grok.com{url}" if url.startswith("/") else url
             return ""
         except Exception as e:
@@ -164,14 +166,11 @@ class ImageWSBaseProcessor(BaseProcessor):
         for attempt in range(max_retries):
             try:
                 dl_service = self._get_dl()
-                # 构建路径
-                if url.startswith("http"):
-                    from urllib.parse import urlparse
-                    path = urlparse(url).path
-                else:
-                    path = url
-
-                base64_data = await dl_service.to_base64(path, self.token, "image")
+                # 绝对 URL 需要保留原始域名（如 imagine-public.x.ai）
+                download_target = url
+                base64_data = await dl_service.to_base64(
+                    download_target, self.token, "image"
+                )
                 if base64_data:
                     if "," in base64_data:
                         return base64_data.split(",", 1)[1]

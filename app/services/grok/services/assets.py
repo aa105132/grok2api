@@ -524,8 +524,9 @@ class DownloadService(BaseService):
                     candidate_urls.append(raw_input)
             else:
                 file_path = raw_input if raw_input.startswith("/") else f"/{raw_input}"
-                # imagine-public 资源在 grok.com 下，优先走主站下载。
+                # imagine-public 资源优先从 imagine-public.x.ai 获取，再回退主站/CDN。
                 if file_path.startswith("/imagine-public/"):
+                    candidate_urls.append(f"https://imagine-public.x.ai{file_path}")
                     candidate_urls.append(f"https://grok.com{file_path}")
                 candidate_urls.append(f"{DOWNLOAD_API}{file_path}")
 
@@ -547,11 +548,32 @@ class DownloadService(BaseService):
                     )
 
                     if response.status_code == 200:
-                        # 直接转换为 base64，不保存到本地
-                        content = response.content
                         mime = response.headers.get(
                             "content-type", "application/octet-stream"
                         ).split(";")[0]
+
+                        # 防止把 HTML 错页误当成图片/视频成功下载。
+                        if media_type == "image" and not mime.startswith("image/"):
+                            attempts.append(
+                                {
+                                    "url": url,
+                                    "status": response.status_code,
+                                    "mime": mime,
+                                }
+                            )
+                            continue
+                        if media_type == "video" and not mime.startswith("video/"):
+                            attempts.append(
+                                {
+                                    "url": url,
+                                    "status": response.status_code,
+                                    "mime": mime,
+                                }
+                            )
+                            continue
+
+                        # 直接转换为 base64，不保存到本地
+                        content = response.content
                         b64 = base64.b64encode(content).decode()
 
                         logger.debug(f"Downloaded and converted to base64: {file_path}")
