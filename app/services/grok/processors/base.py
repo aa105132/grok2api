@@ -259,6 +259,8 @@ class BaseProcessor:
 
     async def process_url(self, path: str, media_type: str = "image") -> str:
         """Download and cache asset locally, returning a /v1/files/* URL."""
+        import asyncio
+
         normalized_path = self._normalize_path(path)
         cache_dir = self._cache_dir(media_type)
         key = hashlib.sha1(
@@ -275,25 +277,40 @@ class BaseProcessor:
             if existing and existing.is_file():
                 return self._public_file_url(media_type, existing.name)
 
-        try:
-            dl_service = self._get_dl()
-            data_uri = await dl_service.to_base64(normalized_path, self.token, media_type)
-            mime, b64 = self._parse_data_uri(data_uri)
-            if not b64:
-                raise ValueError("empty base64 payload")
+        # 重试逻辑
+        max_retries = 3
+        retry_delays = [1, 2, 3]  # 重试延迟(秒)
 
-            ext = ext_from_path or _MIME_TO_EXT.get(mime, self._default_ext(media_type))
-            filename = f"{key}{ext}"
-            file_path = cache_dir / filename
+        for attempt in range(max_retries):
+            try:
+                dl_service = self._get_dl()
+                data_uri = await dl_service.to_base64(normalized_path, self.token, media_type)
+                mime, b64 = self._parse_data_uri(data_uri)
+                if not b64:
+                    raise ValueError("empty base64 payload")
 
-            if not file_path.exists():
-                binary = base64.b64decode(b64)
-                await self._write_file(file_path, binary)
+                ext = ext_from_path or _MIME_TO_EXT.get(mime, self._default_ext(media_type))
+                filename = f"{key}{ext}"
+                file_path = cache_dir / filename
 
-            return self._public_file_url(media_type, filename)
-        except Exception as e:
-            logger.warning(f"Cache asset failed, fallback to upstream URL: {e}")
-            return f"{ASSET_URL.rstrip('/')}{normalized_path}"
+                if not file_path.exists():
+                    binary = base64.b64decode(b64)
+                    await self._write_file(file_path, binary)
+
+                return self._public_file_url(media_type, filename)
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    delay = retry_delays[attempt]
+                    logger.info(
+                        f"Cache asset attempt {attempt + 1}/{max_retries} failed for {normalized_path}, "
+                        f"retrying in {delay}s: {e}"
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    logger.warning(
+                        f"Cache asset failed after {max_retries} attempts, fallback to upstream URL: {e}"
+                    )
+                    return f"{ASSET_URL.rstrip('/')}{normalized_path}"
 
 
 __all__ = [
