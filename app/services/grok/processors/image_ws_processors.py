@@ -134,24 +134,40 @@ class ImageWSBaseProcessor(BaseProcessor):
 
     async def _download_from_url(self, url: str, image_id: str) -> str:
         """异步下载 URL 并转 base64（用于 blob 为空时 fallback）"""
-        try:
-            dl_service = self._get_dl()
-            # 构建路径
-            if url.startswith("http"):
-                from urllib.parse import urlparse
-                path = urlparse(url).path
-            else:
-                path = url
+        import asyncio
 
-            base64_data = await dl_service.to_base64(path, self.token, "image")
-            if base64_data:
-                if "," in base64_data:
-                    return base64_data.split(",", 1)[1]
-                return base64_data
-            return ""
-        except Exception as e:
-            logger.warning(f"Download fallback failed for {image_id}: {e}")
-            return ""
+        max_retries = 3
+        retry_delays = [1, 2, 3]  # 重试延迟(秒)
+
+        for attempt in range(max_retries):
+            try:
+                dl_service = self._get_dl()
+                # 构建路径
+                if url.startswith("http"):
+                    from urllib.parse import urlparse
+                    path = urlparse(url).path
+                else:
+                    path = url
+
+                base64_data = await dl_service.to_base64(path, self.token, "image")
+                if base64_data:
+                    if "," in base64_data:
+                        return base64_data.split(",", 1)[1]
+                    return base64_data
+                return ""
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    delay = retry_delays[attempt]
+                    logger.info(
+                        f"Download attempt {attempt + 1}/{max_retries} failed for {image_id}, "
+                        f"retrying in {delay}s: {e}"
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    logger.warning(
+                        f"Download failed for {image_id} after {max_retries} attempts: {e}"
+                    )
+                    return ""
 
 
 class ImageWSStreamProcessor(ImageWSBaseProcessor):
