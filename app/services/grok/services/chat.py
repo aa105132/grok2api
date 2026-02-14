@@ -532,14 +532,6 @@ class ChatService:
 
         response, _, model_name = await service.chat_openai(token, chat_request)
 
-        for attempt in range(max_token_retries):
-            # 选择 token（排除已失败的）
-            token = None
-            for pool_name in ModelService.pool_candidates_for_model(model):
-                token = token_mgr.get_token(pool_name, exclude=tried_tokens)
-                if token:
-                    break
-
         # 非流式
         logger.debug(f"Processing non-stream response: model={model}")
         result = await CollectProcessor(model_name, token).process(response)
