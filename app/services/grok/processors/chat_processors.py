@@ -31,6 +31,7 @@ class StreamProcessor(BaseProcessor):
         self.response_id: str = None
         self.fingerprint: str = ""
         self.think_opened: bool = False
+        self.in_reasoning: bool | None = None
         self.role_sent: bool = False
         self.normal_token_emitted: bool = False
         self.filter_tags = get_config("chat.filter_tags")
@@ -48,11 +49,32 @@ class StreamProcessor(BaseProcessor):
         """将多种布尔表示归一化为 bool。"""
         if isinstance(value, bool):
             return value
+        if isinstance(value, int):
+            if value == 1:
+                return True
+            if value == 0:
+                return False
         if isinstance(value, str):
             normalized = value.strip().lower()
-            if normalized in {"true", "1", "yes", "y", "on"}:
+            if normalized in {
+                "true",
+                "1",
+                "yes",
+                "y",
+                "on",
+                "enable",
+                "enabled",
+            }:
                 return True
-            if normalized in {"false", "0", "no", "n", "off"}:
+            if normalized in {
+                "false",
+                "0",
+                "no",
+                "n",
+                "off",
+                "disable",
+                "disabled",
+            }:
                 return False
         return None
 
@@ -76,6 +98,19 @@ class StreamProcessor(BaseProcessor):
         for key in bool_keys:
             parsed = self._parse_bool_flag(payload.get(key))
             if parsed is not None:
+                return parsed
+
+        for key, value in payload.items():
+            if not isinstance(key, str):
+                continue
+            parsed = self._parse_bool_flag(value)
+            if parsed is None:
+                continue
+            normalized_key = key.strip().lower().replace("-", "_")
+            if any(
+                mark in normalized_key
+                for mark in ("think", "reason", "cot", "chain_of_thought")
+            ):
                 return parsed
 
         type_keys = ("tokenType", "streamType", "responseType", "phase", "state", "type")
@@ -213,6 +248,7 @@ class StreamProcessor(BaseProcessor):
                     if self.think_opened and self.show_think:
                         yield self._sse("</think>\n")
                         self.think_opened = False
+                    self.in_reasoning = False
 
                     # 某些上游实现只在 modelResponse.message 给出最终答案；
                     # 当之前没有输出过普通 token 时，用该字段兜底。
@@ -263,7 +299,10 @@ class StreamProcessor(BaseProcessor):
                         if filtered:
                             reasoning_flag = self._extract_reasoning_flag(resp)
 
-                            if reasoning_flag is True:
+                            if reasoning_flag is not None:
+                                self.in_reasoning = reasoning_flag
+
+                            if self.in_reasoning is True:
                                 if self.show_think:
                                     if not self.think_opened:
                                         yield self._sse("<think>\n")

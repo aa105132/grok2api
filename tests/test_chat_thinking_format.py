@@ -70,3 +70,35 @@ def test_stream_processor_hides_reasoning_tokens_when_disabled():
     assert "Thinking about the user's request" not in text
     assert "问候处理- 你好作为初始问候" not in text
     assert text == "你好！有什么可以帮你的吗？"
+
+
+def test_stream_processor_keeps_reasoning_wrapped_when_intermediate_flag_missing():
+    responses = [
+        {"responseId": "resp-3", "isThinking": True, "token": "推理第一段"},
+        {"token": "推理第二段"},
+        {"isThinking": False, "token": "最终答案"},
+    ]
+
+    text = asyncio.run(_run_stream_processor(responses, think=True))
+
+    think_start = text.index("<think>")
+    think_end = text.index("</think>")
+    think_block = text[think_start:think_end]
+
+    assert "推理第一段" in think_block
+    assert "推理第二段" in think_block
+    assert text.endswith("最终答案")
+
+
+def test_stream_processor_supports_enabled_disabled_reasoning_flags():
+    responses = [
+        {"responseId": "resp-4", "reasoningStatus": "enabled", "token": "推理内容"},
+        {"reasoningStatus": "disabled", "token": "直接答案"},
+    ]
+
+    text = asyncio.run(_run_stream_processor(responses, think=True))
+
+    assert "<think>" in text
+    assert "推理内容" in text
+    assert "</think>" in text
+    assert text.endswith("直接答案")
