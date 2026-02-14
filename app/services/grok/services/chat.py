@@ -532,6 +532,14 @@ class ChatService:
 
         response, _, model_name = await service.chat_openai(token, chat_request)
 
+        # 流式
+        if is_stream:
+            logger.debug(f"Processing stream response: model={model}")
+            processor = StreamProcessor(model_name, token, think)
+            return wrap_stream_with_usage(
+                processor.process(response), token_mgr, token, model
+            )
+
         # 非流式
         logger.debug(f"Processing non-stream response: model={model}")
         result = await CollectProcessor(model_name, token).process(response)
