@@ -32,6 +32,7 @@ class StreamProcessor(BaseProcessor):
         self.fingerprint: str = ""
         self.think_opened: bool = False
         self.role_sent: bool = False
+        self.normal_token_emitted: bool = False
         self.filter_tags = get_config("chat.filter_tags")
         self.image_format = get_config("app.image_format")
         self._tag_buffer: str = ""
@@ -41,6 +42,61 @@ class StreamProcessor(BaseProcessor):
             self.show_think = get_config("chat.thinking")
         else:
             self.show_think = think
+
+    @staticmethod
+    def _parse_bool_flag(value: Any) -> bool | None:
+        """将多种布尔表示归一化为 bool。"""
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"true", "1", "yes", "y", "on"}:
+                return True
+            if normalized in {"false", "0", "no", "n", "off"}:
+                return False
+        return None
+
+    def _extract_reasoning_flag(self, payload: Any) -> bool | None:
+        """
+        尝试从上游响应中提取“当前 token 是否为思维链”标记。
+
+        兼容不同字段命名，无法识别时返回 None。
+        """
+        if not isinstance(payload, dict):
+            return None
+
+        bool_keys = (
+            "isThinking",
+            "thinking",
+            "inThinking",
+            "isReasoning",
+            "reasoning",
+            "inReasoning",
+        )
+        for key in bool_keys:
+            parsed = self._parse_bool_flag(payload.get(key))
+            if parsed is not None:
+                return parsed
+
+        type_keys = ("tokenType", "streamType", "responseType", "phase", "state", "type")
+        for key in type_keys:
+            value = payload.get(key)
+            if not isinstance(value, str):
+                continue
+            normalized = value.strip().lower().replace("-", "_")
+            if any(mark in normalized for mark in ("think", "reason", "cot", "chain_of_thought")):
+                return True
+            if any(mark in normalized for mark in ("final", "answer", "output")):
+                return False
+
+        nested_keys = ("metadata", "tokenInfo", "streamingMetadata", "llmInfo")
+        for key in nested_keys:
+            nested = payload.get(key)
+            parsed = self._extract_reasoning_flag(nested)
+            if parsed is not None:
+                return parsed
+
+        return None
 
     def _filter_token(self, token: str) -> str:
         """过滤 token 中的特殊标签（如 <grok:render>...</grok:render>），支持跨 token 的标签过滤"""
@@ -155,10 +211,16 @@ class StreamProcessor(BaseProcessor):
                 # modelResponse
                 if mr := resp.get("modelResponse"):
                     if self.think_opened and self.show_think:
-                        if msg := mr.get("message"):
-                            yield self._sse(msg + "\n")
                         yield self._sse("</think>\n")
                         self.think_opened = False
+
+                    # 某些上游实现只在 modelResponse.message 给出最终答案；
+                    # 当之前没有输出过普通 token 时，用该字段兜底。
+                    if not self.normal_token_emitted and (msg := mr.get("message")):
+                        filtered_msg = self._filter_token(str(msg))
+                        if filtered_msg:
+                            yield self._sse(filtered_msg)
+                            self.normal_token_emitted = True
 
                     # 处理生成的图片
                     for url in _collect_image_urls(mr):
@@ -199,6 +261,21 @@ class StreamProcessor(BaseProcessor):
                     if token:
                         filtered = self._filter_token(token)
                         if filtered:
+                            reasoning_flag = self._extract_reasoning_flag(resp)
+
+                            if reasoning_flag is True:
+                                if self.show_think:
+                                    if not self.think_opened:
+                                        yield self._sse("<think>\n")
+                                        self.think_opened = True
+                                    yield self._sse(filtered)
+                                continue
+
+                            if self.think_opened and self.show_think:
+                                yield self._sse("</think>\n")
+                                self.think_opened = False
+
+                            self.normal_token_emitted = True
                             yield self._sse(filtered)
 
             if self.think_opened:
