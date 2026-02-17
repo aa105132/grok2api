@@ -42,6 +42,14 @@ class ResponseLoggerMiddleware(BaseHTTPMiddleware):
             # 计算耗时
             duration = (time.time() - start_time) * 1000
 
+            # SSE 流式响应：注入反向代理防缓冲头
+            # 解决 Nginx/Cloudflare 等反代理缓冲导致 SSE 截断或延迟的问题
+            content_type = response.headers.get("content-type", "")
+            if "text/event-stream" in content_type:
+                response.headers["X-Accel-Buffering"] = "no"
+                response.headers["Cache-Control"] = "no-cache, no-store, no-transform"
+                response.headers["Connection"] = "keep-alive"
+
             # 记录响应信息
             logger.info(
                 f"Response: {request.method} {request.url.path} - {response.status_code} ({duration:.2f}ms)",
