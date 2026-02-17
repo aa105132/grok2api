@@ -103,9 +103,7 @@ class StreamProcessor(BaseProcessor):
         self.fingerprint: str = ""
         self.rollout_id: str = ""
         self.think_opened: bool = False
-        self.in_reasoning: bool | None = None
         self.role_sent: bool = False
-        self.normal_token_emitted: bool = False
         self.filter_tags = get_config("chat.filter_tags")
         self.image_format = get_config("app.image_format")
         self._tag_buffer: str = ""
@@ -120,95 +118,6 @@ class StreamProcessor(BaseProcessor):
             self.show_think = get_config("chat.thinking")
         else:
             self.show_think = think
-
-    @staticmethod
-    def _parse_bool_flag(value: Any) -> bool | None:
-        """将多种布尔表示归一化为 bool。"""
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, int):
-            if value == 1:
-                return True
-            if value == 0:
-                return False
-        if isinstance(value, str):
-            normalized = value.strip().lower()
-            if normalized in {
-                "true",
-                "1",
-                "yes",
-                "y",
-                "on",
-                "enable",
-                "enabled",
-            }:
-                return True
-            if normalized in {
-                "false",
-                "0",
-                "no",
-                "n",
-                "off",
-                "disable",
-                "disabled",
-            }:
-                return False
-        return None
-
-    def _extract_reasoning_flag(self, payload: Any) -> bool | None:
-        """
-        尝试从上游响应中提取“当前 token 是否为思维链”标记。
-
-        兼容不同字段命名，无法识别时返回 None。
-        """
-        if not isinstance(payload, dict):
-            return None
-
-        bool_keys = (
-            "isThinking",
-            "thinking",
-            "inThinking",
-            "isReasoning",
-            "reasoning",
-            "inReasoning",
-        )
-        for key in bool_keys:
-            parsed = self._parse_bool_flag(payload.get(key))
-            if parsed is not None:
-                return parsed
-
-        for key, value in payload.items():
-            if not isinstance(key, str):
-                continue
-            parsed = self._parse_bool_flag(value)
-            if parsed is None:
-                continue
-            normalized_key = key.strip().lower().replace("-", "_")
-            if any(
-                mark in normalized_key
-                for mark in ("think", "reason", "cot", "chain_of_thought")
-            ):
-                return parsed
-
-        type_keys = ("tokenType", "streamType", "responseType", "phase", "state", "type")
-        for key in type_keys:
-            value = payload.get(key)
-            if not isinstance(value, str):
-                continue
-            normalized = value.strip().lower().replace("-", "_")
-            if any(mark in normalized for mark in ("think", "reason", "cot", "chain_of_thought")):
-                return True
-            if any(mark in normalized for mark in ("final", "answer", "output")):
-                return False
-
-        nested_keys = ("metadata", "tokenInfo", "streamingMetadata", "llmInfo")
-        for key in nested_keys:
-            nested = payload.get(key)
-            parsed = self._extract_reasoning_flag(nested)
-            if parsed is not None:
-                return parsed
-
-        return None
 
     def _filter_tool_card(self, token: str) -> str:
         """处理 xai:tool_usage_card 标签：提取工具调用信息而非简单删除。
@@ -352,24 +261,23 @@ class StreamProcessor(BaseProcessor):
     ) -> AsyncGenerator[str, None]:
         """处理流式响应"""
         idle_timeout = get_config("timeout.stream_idle_timeout")
-        line_count = 0
 
         try:
             async for line in _with_idle_timeout(response, idle_timeout, self.model):
                 line = _normalize_stream_line(line)
                 if not line:
                     continue
-                line_count += 1
                 try:
                     data = orjson.loads(line)
                 except orjson.JSONDecodeError:
-                    logger.warning(f"[StreamDebug] Failed to parse JSON line #{line_count}: {line[:200]}")
                     continue
 
                 resp = data.get("result", {}).get("response", {})
                 if not resp:
-                    logger.debug(f"[StreamDebug] Line #{line_count} has no result.response, keys={list(data.keys())}, data={str(data)[:300]}")
                     continue
+
+                # 使用上游的 isThinking 字段判断思维链状态
+                is_thinking = bool(resp.get("isThinking"))
 
                 if (llm := resp.get("llmInfo")) and not self.fingerprint:
                     self.fingerprint = llm.get("modelHash", "")
@@ -384,32 +292,23 @@ class StreamProcessor(BaseProcessor):
 
                 # 图像生成进度
                 if img := resp.get("streamingImageGenerationResponse"):
-                    if self.show_think:
-                        if not self.think_opened:
-                            yield self._sse("<think>\n")
-                            self.think_opened = True
-                        idx = img.get("imageIndex", 0) + 1
-                        progress = img.get("progress", 0)
-                        yield self._sse(
-                            f"正在生成第{idx}张图片中，当前进度{progress}%\n"
-                        )
+                    if not self.show_think:
+                        continue
+                    if is_thinking and not self.think_opened:
+                        yield self._sse("<think>\n")
+                        self.think_opened = True
+                    if (not is_thinking) and self.think_opened:
+                        yield self._sse("\n</think>\n")
+                        self.think_opened = False
+                    idx = img.get("imageIndex", 0) + 1
+                    progress = img.get("progress", 0)
+                    yield self._sse(
+                        f"正在生成第{idx}张图片中，当前进度{progress}%\n"
+                    )
                     continue
 
                 # modelResponse
                 if mr := resp.get("modelResponse"):
-                    if self.think_opened and self.show_think:
-                        yield self._sse("</think>\n")
-                        self.think_opened = False
-                    self.in_reasoning = False
-
-                    # 某些上游实现只在 modelResponse.message 给出最终答案；
-                    # 当之前没有输出过普通 token 时，用该字段兜底。
-                    if not self.normal_token_emitted and (msg := mr.get("message")):
-                        filtered_msg = self._filter_token(str(msg))
-                        if filtered_msg:
-                            yield self._sse(filtered_msg)
-                            self.normal_token_emitted = True
-
                     # 处理生成的图片
                     for url in _collect_image_urls(mr):
                         parts = url.split("/")
@@ -444,46 +343,45 @@ class StreamProcessor(BaseProcessor):
                         self.fingerprint = meta["llm_info"]["modelHash"]
                     continue
 
-                # 普通 token — 兼容多种字段名
-                raw_token = resp.get("token")
-                if raw_token is None:
-                    # 某些模型可能用 text / content / message 字段
-                    raw_token = resp.get("text") or resp.get("content")
-                
-                if raw_token is not None:
-                    if raw_token:
-                        filtered = self._filter_token(raw_token)
-                        if filtered:
-                            reasoning_flag = self._extract_reasoning_flag(resp)
+                # cardAttachment（上游支持的搜索结果卡片）
+                if card := resp.get("cardAttachment"):
+                    json_data = card.get("jsonData")
+                    if isinstance(json_data, str) and json_data.strip():
+                        try:
+                            card_data = orjson.loads(json_data)
+                        except orjson.JSONDecodeError:
+                            card_data = None
+                        if isinstance(card_data, dict):
+                            image = card_data.get("image") or {}
+                            original = image.get("original")
+                            title = image.get("title") or ""
+                            if original:
+                                title_safe = title.replace("\n", " ").strip()
+                                if title_safe:
+                                    yield self._sse(f"![{title_safe}]({original})\n")
+                                else:
+                                    yield self._sse(f"![image]({original})\n")
+                    continue
 
-                            if reasoning_flag is not None:
-                                self.in_reasoning = reasoning_flag
+                # 普通 token
+                if (token := resp.get("token")) is not None:
+                    if not token:
+                        continue
+                    filtered = self._filter_token(token)
+                    if not filtered:
+                        continue
+                    if is_thinking:
+                        if not self.show_think:
+                            continue
+                        if not self.think_opened:
+                            yield self._sse("<think>\n")
+                            self.think_opened = True
+                    else:
+                        if self.think_opened:
+                            yield self._sse("\n</think>\n")
+                            self.think_opened = False
+                    yield self._sse(filtered)
 
-                            if self.in_reasoning is True:
-                                if self.show_think:
-                                    if not self.think_opened:
-                                        yield self._sse("<think>\n")
-                                        self.think_opened = True
-                                    yield self._sse(filtered)
-                                continue
-
-                            if self.think_opened and self.show_think:
-                                yield self._sse("</think>\n")
-                                self.think_opened = False
-
-                            self.normal_token_emitted = True
-                            yield self._sse(filtered)
-                else:
-                    # 没有匹配到已知字段，记录调试日志
-                    resp_keys = list(resp.keys())
-                    if resp_keys and not any(k in resp_keys for k in ("llmInfo", "responseId", "rolloutId")):
-                        logger.debug(f"[StreamDebug] Line #{line_count} unhandled resp keys: {resp_keys}, data={str(resp)[:300]}")
-
-            logger.info(
-                f"[StreamDebug] Stream finished: lines={line_count}, "
-                f"normal_token_emitted={self.normal_token_emitted}, "
-                f"role_sent={self.role_sent}, model={self.model}"
-            )
             if self.think_opened:
                 yield self._sse("</think>\n")
             yield self._sse(finish="stop")

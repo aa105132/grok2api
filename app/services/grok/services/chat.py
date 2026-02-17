@@ -253,6 +253,7 @@ class ChatRequestBuilder:
         mode: str = None,
         file_attachments: List[str] = None,
         image_attachments: List[str] = None,
+        model_config_override: Dict[str, Any] = None,
     ) -> Dict[str, Any]:
         """构造请求体"""
         merged_attachments = []
@@ -298,6 +299,9 @@ class ChatRequestBuilder:
 
         payload["modelMode"] = mode
 
+        if model_config_override:
+            payload["responseMetadata"]["modelConfigOverride"] = model_config_override
+
         return payload
 
 
@@ -317,6 +321,7 @@ class GrokChatService:
         file_attachments: List[str] = None,
         image_attachments: List[str] = None,
         raw_payload: Dict[str, Any] = None,
+        model_config_override: Dict[str, Any] = None,
     ):
         """发送聊天请求"""
         if stream is None:
@@ -327,15 +332,12 @@ class GrokChatService:
             raw_payload
             if raw_payload is not None
             else ChatRequestBuilder.build_payload(
-                message, model, mode, file_attachments, image_attachments
+                message, model, mode, file_attachments, image_attachments,
+                model_config_override=model_config_override,
             )
         )
         proxies = {"http": self.proxy, "https": self.proxy} if self.proxy else None
         timeout = get_config("network.timeout")
-
-        # Log the actual payload being sent
-        if raw_payload is not None:
-            logger.info(f"Chat raw_payload: {orjson.dumps(payload).decode()[:500]}")
 
         logger.debug(
             f"Chat request: model={model}, mode={mode}, stream={stream}, attachments={len(file_attachments or [])}"
@@ -463,6 +465,11 @@ class GrokChatService:
             request.stream if request.stream is not None else get_config("chat.stream")
         )
 
+        model_config_override = {
+            "temperature": 0.8,
+            "topP": 0.95,
+        }
+
         response = await self.chat(
             token,
             message,
@@ -471,6 +478,7 @@ class GrokChatService:
             stream,
             file_attachments=file_ids,
             image_attachments=[],
+            model_config_override=model_config_override,
         )
 
         return response, stream, request.model
