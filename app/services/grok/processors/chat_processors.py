@@ -352,18 +352,24 @@ class StreamProcessor(BaseProcessor):
     ) -> AsyncGenerator[str, None]:
         """处理流式响应"""
         idle_timeout = get_config("timeout.stream_idle_timeout")
+        line_count = 0
 
         try:
             async for line in _with_idle_timeout(response, idle_timeout, self.model):
                 line = _normalize_stream_line(line)
                 if not line:
                     continue
+                line_count += 1
                 try:
                     data = orjson.loads(line)
                 except orjson.JSONDecodeError:
+                    logger.warning(f"[StreamDebug] Failed to parse JSON line #{line_count}: {line[:200]}")
                     continue
 
                 resp = data.get("result", {}).get("response", {})
+                if not resp:
+                    logger.debug(f"[StreamDebug] Line #{line_count} has no result.response, keys={list(data.keys())}, data={str(data)[:300]}")
+                    continue
 
                 if (llm := resp.get("llmInfo")) and not self.fingerprint:
                     self.fingerprint = llm.get("modelHash", "")
@@ -438,10 +444,15 @@ class StreamProcessor(BaseProcessor):
                         self.fingerprint = meta["llm_info"]["modelHash"]
                     continue
 
-                # 普通 token
-                if (token := resp.get("token")) is not None:
-                    if token:
-                        filtered = self._filter_token(token)
+                # 普通 token — 兼容多种字段名
+                raw_token = resp.get("token")
+                if raw_token is None:
+                    # 某些模型可能用 text / content / message 字段
+                    raw_token = resp.get("text") or resp.get("content")
+                
+                if raw_token is not None:
+                    if raw_token:
+                        filtered = self._filter_token(raw_token)
                         if filtered:
                             reasoning_flag = self._extract_reasoning_flag(resp)
 
@@ -462,7 +473,17 @@ class StreamProcessor(BaseProcessor):
 
                             self.normal_token_emitted = True
                             yield self._sse(filtered)
+                else:
+                    # 没有匹配到已知字段，记录调试日志
+                    resp_keys = list(resp.keys())
+                    if resp_keys and not any(k in resp_keys for k in ("llmInfo", "responseId", "rolloutId")):
+                        logger.debug(f"[StreamDebug] Line #{line_count} unhandled resp keys: {resp_keys}, data={str(resp)[:300]}")
 
+            logger.info(
+                f"[StreamDebug] Stream finished: lines={line_count}, "
+                f"normal_token_emitted={self.normal_token_emitted}, "
+                f"role_sent={self.role_sent}, model={self.model}"
+            )
             if self.think_opened:
                 yield self._sse("</think>\n")
             yield self._sse(finish="stop")

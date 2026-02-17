@@ -411,10 +411,16 @@ class GrokChatService:
 
         # 流式传输
         async def stream_response():
+            line_count = 0
             try:
                 async for line in response.aiter_lines():
+                    line_count += 1
+                    if line_count <= 3 or line_count % 50 == 0:
+                        line_str = line if isinstance(line, str) else line.decode("utf-8", errors="ignore") if isinstance(line, (bytes, bytearray)) else str(line)
+                        logger.debug(f"[UpstreamDebug] Line #{line_count} (len={len(line_str)}): {line_str[:300]}")
                     yield line
             finally:
+                logger.info(f"[UpstreamDebug] Stream ended: total_lines={line_count}, model={model}")
                 if session:
                     await session.close()
 
