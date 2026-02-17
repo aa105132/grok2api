@@ -339,9 +339,11 @@ class GrokChatService:
         proxies = {"http": self.proxy, "https": self.proxy} if self.proxy else None
         timeout = get_config("network.timeout")
 
-        logger.debug(
+        logger.info(
             f"Chat request: model={model}, mode={mode}, stream={stream}, attachments={len(file_attachments or [])}"
         )
+        # 临时调试：记录完整 payload
+        logger.info(f"[PayloadDebug] {orjson.dumps(payload).decode()}")
 
         # 建立连接
         async def establish_connection():

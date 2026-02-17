@@ -286,7 +286,8 @@ class StreamProcessor(BaseProcessor):
                 token_val = repr(resp.get("token", ""))[:100] if has_token else "N/A"
                 user_resp = resp.get("userResponse")
                 user_resp_str = str(user_resp)[:200] if user_resp else "N/A"
-                logger.info(f"[StreamDebug] line#{line_count} resp_keys={resp_keys}, has_token={has_token}, token={token_val}, isThinking={resp.get('isThinking')}, userResponse={user_resp_str}")
+                is_soft_stop = resp.get("isSoftStop")
+                logger.info(f"[StreamDebug] line#{line_count} resp_keys={resp_keys}, has_token={has_token}, token={token_val}, isThinking={resp.get('isThinking')}, isSoftStop={is_soft_stop}, userResponse={user_resp_str}")
 
                 # 使用上游的 isThinking 字段判断思维链状态
                 is_thinking = bool(resp.get("isThinking"))
@@ -394,13 +395,13 @@ class StreamProcessor(BaseProcessor):
                             self.think_opened = False
                     yield self._sse(filtered)
 
-            logger.info(f"[StreamDebug] Stream ended: total_lines={line_count}, role_sent={self.role_sent}, think_opened={self.think_opened}, model={self.model}")
+            logger.info(f"[StreamDebug] Stream ended normally: total_lines={line_count}, role_sent={self.role_sent}, think_opened={self.think_opened}, model={self.model}")
             if self.think_opened:
                 yield self._sse("</think>\n")
             yield self._sse(finish="stop")
             yield "data: [DONE]\n\n"
         except asyncio.CancelledError:
-            logger.debug("Stream cancelled by client", extra={"model": self.model})
+            logger.warning(f"[StreamDebug] Stream CANCELLED by client: total_lines={line_count}, role_sent={self.role_sent}, model={self.model}")
         except StreamIdleTimeoutError as e:
             raise UpstreamException(
                 message=f"Stream idle timeout after {e.idle_seconds}s",
