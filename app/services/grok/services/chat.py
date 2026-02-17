@@ -262,25 +262,6 @@ class ChatRequestBuilder:
             merged_attachments.extend(image_attachments)
 
         payload = {
-            "temporary": get_config("chat.temporary"),
-            "modelName": model,
-            "message": message,
-            "fileAttachments": merged_attachments,
-            "imageAttachments": [],
-            "disableSearch": False,
-            "enableImageGeneration": True,
-            "returnImageBytes": False,
-            "enableImageStreaming": True,
-            "imageGenerationCount": 2,
-            "forceConcise": False,
-            "toolOverrides": {},
-            "enableSideBySide": True,
-            "sendFinalMetadata": True,
-            "responseMetadata": {
-                "modelConfigOverride": {"modelMap": {}},
-                "requestModelDetails": {"modelId": model},
-            },
-            "disableMemory": get_config("chat.disable_memory"),
             "deviceEnvInfo": {
                 "darkModeEnabled": False,
                 "devicePixelRatio": 2,
@@ -289,10 +270,33 @@ class ChatRequestBuilder:
                 "viewportWidth": 2056,
                 "viewportHeight": 1083,
             },
+            "disableMemory": get_config("chat.disable_memory"),
+            "disableSearch": False,
+            "disableSelfHarmShortCircuit": False,
+            "disableTextFollowUps": False,
+            "enableImageGeneration": True,
+            "enableImageStreaming": True,
+            "enableSideBySide": True,
+            "fileAttachments": merged_attachments,
+            "forceConcise": False,
+            "forceSideBySide": False,
+            "imageAttachments": [],
+            "imageGenerationCount": 2,
+            "isAsyncChat": False,
+            "isReasoning": False,
+            "message": message,
+            "modelName": model,
+            "responseMetadata": {
+                "requestModelDetails": {"modelId": model},
+            },
+            "returnImageBytes": False,
+            "returnRawGrokInXaiRequest": False,
+            "sendFinalMetadata": True,
+            "temporary": get_config("chat.temporary"),
+            "toolOverrides": {},
         }
 
-        if mode:
-            payload["modelMode"] = mode
+        payload["modelMode"] = mode
 
         return payload
 
@@ -411,16 +415,10 @@ class GrokChatService:
 
         # 流式传输
         async def stream_response():
-            line_count = 0
             try:
                 async for line in response.aiter_lines():
-                    line_count += 1
-                    if line_count <= 3 or line_count % 50 == 0:
-                        line_str = line if isinstance(line, str) else line.decode("utf-8", errors="ignore") if isinstance(line, (bytes, bytearray)) else str(line)
-                        logger.debug(f"[UpstreamDebug] Line #{line_count} (len={len(line_str)}): {line_str[:300]}")
                     yield line
             finally:
-                logger.info(f"[UpstreamDebug] Stream ended: total_lines={line_count}, model={model}")
                 if session:
                     await session.close()
 
