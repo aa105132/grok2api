@@ -23,6 +23,77 @@ from .base import (
 )
 
 
+def extract_tool_text(raw: str, rollout_id: str = "") -> str:
+    """从 xai:tool_usage_card 标签中提取工具调用信息并格式化为可读文本。
+
+    支持的工具类型:
+    - web_search -> [WebSearch]
+    - search_images -> [SearchImage]
+    - chatroom_send -> [AgentThink]
+
+    Args:
+        raw: 原始 XML 内容（包含 xai:tool_usage_card 标签）
+        rollout_id: 可选的 rollout 标识符，用于前缀标签
+
+    Returns:
+        格式化后的工具调用文本，如 "[rolloutId][WebSearch] query_text"
+    """
+    if not raw:
+        return ""
+    name_match = re.search(
+        r"<xai:tool_name>(.*?)</xai:tool_name>", raw, flags=re.DOTALL
+    )
+    args_match = re.search(
+        r"<xai:tool_args>(.*?)</xai:tool_args>", raw, flags=re.DOTALL
+    )
+
+    name = name_match.group(1) if name_match else ""
+    if name:
+        name = re.sub(r"<!\[CDATA\[(.*?)\]\]>", r"\1", name, flags=re.DOTALL).strip()
+
+    args = args_match.group(1) if args_match else ""
+    if args:
+        args = re.sub(r"<!\[CDATA\[(.*?)\]\]>", r"\1", args, flags=re.DOTALL).strip()
+
+    payload = None
+    if args:
+        try:
+            payload = orjson.loads(args)
+        except orjson.JSONDecodeError:
+            payload = None
+
+    label = name
+    text = args
+    prefix = f"[{rollout_id}]" if rollout_id else ""
+
+    if name == "web_search":
+        label = f"{prefix}[WebSearch]"
+        if isinstance(payload, dict):
+            text = payload.get("query") or payload.get("q") or ""
+    elif name == "search_images":
+        label = f"{prefix}[SearchImage]"
+        if isinstance(payload, dict):
+            text = (
+                payload.get("image_description")
+                or payload.get("description")
+                or payload.get("query")
+                or ""
+            )
+    elif name == "chatroom_send":
+        label = f"{prefix}[AgentThink]"
+        if isinstance(payload, dict):
+            text = payload.get("message") or ""
+
+    if label and text:
+        return f"{label} {text}".strip()
+    if label:
+        return label
+    if text:
+        return text
+    # Fallback: 去除标签保留原始文本
+    return re.sub(r"<[^>]+>", "", raw, flags=re.DOTALL).strip()
+
+
 class StreamProcessor(BaseProcessor):
     """流式响应处理器"""
 
@@ -30,6 +101,7 @@ class StreamProcessor(BaseProcessor):
         super().__init__(model, token)
         self.response_id: str = None
         self.fingerprint: str = ""
+        self.rollout_id: str = ""
         self.think_opened: bool = False
         self.in_reasoning: bool | None = None
         self.role_sent: bool = False
@@ -38,6 +110,11 @@ class StreamProcessor(BaseProcessor):
         self.image_format = get_config("app.image_format")
         self._tag_buffer: str = ""
         self._in_filter_tag: bool = False
+
+        # 工具调用卡片提取相关
+        self.tool_usage_enabled: bool = "xai:tool_usage_card" in (self.filter_tags or [])
+        self._tool_usage_opened: bool = False
+        self._tool_usage_buffer: str = ""
 
         if think is None:
             self.show_think = get_config("chat.thinking")
@@ -133,8 +210,71 @@ class StreamProcessor(BaseProcessor):
 
         return None
 
+    def _filter_tool_card(self, token: str) -> str:
+        """处理 xai:tool_usage_card 标签：提取工具调用信息而非简单删除。
+
+        支持跨 token 边界的标签匹配，将完整的 tool_usage_card 内容
+        通过 extract_tool_text() 转换为可读的工具调用文本。
+        """
+        start_tag = "<xai:tool_usage_card"
+        end_tag = "</xai:tool_usage_card>"
+
+        if self._tool_usage_opened:
+            self._tool_usage_buffer += token
+            end_idx = self._tool_usage_buffer.find(end_tag)
+            if end_idx == -1:
+                return ""
+            end_pos = end_idx + len(end_tag)
+            raw_card = self._tool_usage_buffer[:end_pos]
+            rest = self._tool_usage_buffer[end_pos:]
+            self._tool_usage_opened = False
+            self._tool_usage_buffer = ""
+            line = extract_tool_text(raw_card, self.rollout_id)
+            result = f"{line}\n" if line else ""
+            if rest:
+                result += self._filter_tool_card(rest)
+            return result
+
+        output_parts = []
+        rest = token
+        while rest:
+            start_idx = rest.find(start_tag)
+            if start_idx == -1:
+                output_parts.append(rest)
+                break
+
+            if start_idx > 0:
+                output_parts.append(rest[:start_idx])
+            rest = rest[start_idx:]
+
+            end_idx = rest.find(end_tag, len(start_tag))
+            if end_idx == -1:
+                self._tool_usage_opened = True
+                self._tool_usage_buffer = rest
+                break
+
+            end_pos = end_idx + len(end_tag)
+            raw_card = rest[:end_pos]
+            line = extract_tool_text(raw_card, self.rollout_id)
+            if line:
+                if output_parts and not output_parts[-1].endswith("\n"):
+                    output_parts[-1] += "\n"
+                output_parts.append(f"{line}\n")
+            rest = rest[end_pos:]
+
+        return "".join(output_parts)
+
     def _filter_token(self, token: str) -> str:
         """过滤 token 中的特殊标签（如 <grok:render>...</grok:render>），支持跨 token 的标签过滤"""
+        if not token:
+            return token
+
+        # 先处理工具调用卡片提取（提取而非删除）
+        if self.tool_usage_enabled:
+            token = self._filter_tool_card(token)
+            if not token:
+                return ""
+
         if not self.filter_tags:
             return token
 
@@ -151,6 +291,8 @@ class StreamProcessor(BaseProcessor):
                         self._tag_buffer = ""
                     else:
                         for tag in self.filter_tags:
+                            if tag == "xai:tool_usage_card":
+                                continue
                             if f"</{tag}>" in self._tag_buffer:
                                 self._in_filter_tag = False
                                 self._tag_buffer = ""
@@ -162,6 +304,8 @@ class StreamProcessor(BaseProcessor):
                 remaining = token[i:]
                 tag_started = False
                 for tag in self.filter_tags:
+                    if tag == "xai:tool_usage_card":
+                        continue
                     if remaining.startswith(f"<{tag}"):
                         tag_started = True
                         break
@@ -225,6 +369,8 @@ class StreamProcessor(BaseProcessor):
                     self.fingerprint = llm.get("modelHash", "")
                 if rid := resp.get("responseId"):
                     self.response_id = rid
+                if rid := resp.get("rolloutId"):
+                    self.rollout_id = str(rid)
 
                 if not self.role_sent:
                     yield self._sse(role="assistant")
@@ -366,12 +512,36 @@ class CollectProcessor(BaseProcessor):
         self.filter_tags = get_config("chat.filter_tags")
 
     def _filter_content(self, content: str) -> str:
-        """过滤内容中的特殊标签"""
+        """过滤内容中的特殊标签，对 xai:tool_usage_card 提取工具调用信息"""
         if not content or not self.filter_tags:
             return content
 
         result = content
+
+        # 对 xai:tool_usage_card 特殊处理：提取工具信息而非删除
+        if "xai:tool_usage_card" in self.filter_tags:
+            rollout_id = ""
+            rollout_match = re.search(
+                r"<rolloutId>(.*?)</rolloutId>", result, flags=re.DOTALL
+            )
+            if rollout_match:
+                rollout_id = rollout_match.group(1).strip()
+
+            result = re.sub(
+                r"<xai:tool_usage_card[^>]*>.*?</xai:tool_usage_card>",
+                lambda match: (
+                    f"{extract_tool_text(match.group(0), rollout_id)}\n"
+                    if extract_tool_text(match.group(0), rollout_id)
+                    else ""
+                ),
+                result,
+                flags=re.DOTALL,
+            )
+
+        # 其他标签直接删除
         for tag in self.filter_tags:
+            if tag == "xai:tool_usage_card":
+                continue
             pattern = rf"<{re.escape(tag)}[^>]*>.*?</{re.escape(tag)}>|<{re.escape(tag)}[^>]*/>"
             result = re.sub(pattern, "", result, flags=re.DOTALL)
 
