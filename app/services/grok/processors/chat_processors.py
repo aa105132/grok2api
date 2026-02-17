@@ -262,19 +262,30 @@ class StreamProcessor(BaseProcessor):
         """处理流式响应"""
         idle_timeout = get_config("timeout.stream_idle_timeout")
 
+        line_count = 0
         try:
             async for line in _with_idle_timeout(response, idle_timeout, self.model):
                 line = _normalize_stream_line(line)
                 if not line:
                     continue
+                line_count += 1
                 try:
                     data = orjson.loads(line)
                 except orjson.JSONDecodeError:
+                    logger.warning(f"[StreamDebug] line#{line_count} JSON parse failed: {line[:200]}")
                     continue
 
                 resp = data.get("result", {}).get("response", {})
                 if not resp:
+                    logger.debug(f"[StreamDebug] line#{line_count} no resp, keys={list(data.keys())}, data={str(data)[:300]}")
                     continue
+
+                # 记录每行的 resp keys 便于调试 grok-420
+                if line_count <= 10 or line_count % 50 == 0:
+                    resp_keys = list(resp.keys())
+                    has_token = "token" in resp
+                    token_val = repr(resp.get("token", ""))[:100] if has_token else "N/A"
+                    logger.info(f"[StreamDebug] line#{line_count} resp_keys={resp_keys}, has_token={has_token}, token={token_val}, isThinking={resp.get('isThinking')}")
 
                 # 使用上游的 isThinking 字段判断思维链状态
                 is_thinking = bool(resp.get("isThinking"))
@@ -382,6 +393,7 @@ class StreamProcessor(BaseProcessor):
                             self.think_opened = False
                     yield self._sse(filtered)
 
+            logger.info(f"[StreamDebug] Stream ended: total_lines={line_count}, role_sent={self.role_sent}, think_opened={self.think_opened}, model={self.model}")
             if self.think_opened:
                 yield self._sse("</think>\n")
             yield self._sse(finish="stop")
