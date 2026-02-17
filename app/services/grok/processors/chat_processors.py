@@ -277,15 +277,16 @@ class StreamProcessor(BaseProcessor):
 
                 resp = data.get("result", {}).get("response", {})
                 if not resp:
-                    logger.debug(f"[StreamDebug] line#{line_count} no resp, keys={list(data.keys())}, data={str(data)[:300]}")
+                    logger.info(f"[StreamDebug] line#{line_count} no resp, keys={list(data.keys())}, data={str(data)[:500]}")
                     continue
 
                 # 记录每行的 resp keys 便于调试 grok-420
-                if line_count <= 10 or line_count % 50 == 0:
-                    resp_keys = list(resp.keys())
-                    has_token = "token" in resp
-                    token_val = repr(resp.get("token", ""))[:100] if has_token else "N/A"
-                    logger.info(f"[StreamDebug] line#{line_count} resp_keys={resp_keys}, has_token={has_token}, token={token_val}, isThinking={resp.get('isThinking')}")
+                resp_keys = list(resp.keys())
+                has_token = "token" in resp
+                token_val = repr(resp.get("token", ""))[:100] if has_token else "N/A"
+                user_resp = resp.get("userResponse")
+                user_resp_str = str(user_resp)[:200] if user_resp else "N/A"
+                logger.info(f"[StreamDebug] line#{line_count} resp_keys={resp_keys}, has_token={has_token}, token={token_val}, isThinking={resp.get('isThinking')}, userResponse={user_resp_str}")
 
                 # 使用上游的 isThinking 字段判断思维链状态
                 is_thinking = bool(resp.get("isThinking"))
