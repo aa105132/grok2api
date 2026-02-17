@@ -259,13 +259,51 @@ class StreamProcessor(BaseProcessor):
     async def process(
         self, response: AsyncIterable[bytes]
     ) -> AsyncGenerator[str, None]:
-        """处理流式响应"""
+        """处理流式响应，支持 SSE 心跳保活"""
         idle_timeout = get_config("timeout.stream_idle_timeout")
+        # 心跳间隔（秒），防止客户端在等待 Grok 思考时超时断开
+        heartbeat_interval = 5.0
 
         line_count = 0
+        first_token_received = False
+        total_idle = 0.0  # 累计空闲时间，用于触发全局 idle timeout
         try:
-            async for line in _with_idle_timeout(response, idle_timeout, self.model):
-                line = _normalize_stream_line(line)
+            iterator = response.__aiter__()
+            while True:
+                try:
+                    if not first_token_received and self.role_sent:
+                        # 在等待第一个 token 期间，使用较短的超时并发送心跳保活
+                        try:
+                            raw_line = await asyncio.wait_for(
+                                iterator.__anext__(), timeout=heartbeat_interval
+                            )
+                            total_idle = 0.0  # 收到数据，重置空闲计时
+                        except asyncio.TimeoutError:
+                            total_idle += heartbeat_interval
+                            if total_idle >= idle_timeout:
+                                logger.warning(
+                                    f"Stream idle timeout after {idle_timeout}s (heartbeat mode)",
+                                    extra={"model": self.model},
+                                )
+                                raise StreamIdleTimeoutError(idle_timeout)
+                            yield ": heartbeat\n\n"
+                            continue
+                    else:
+                        # 正常模式：使用全局 idle timeout
+                        try:
+                            raw_line = await asyncio.wait_for(
+                                iterator.__anext__(), timeout=idle_timeout
+                            )
+                        except asyncio.TimeoutError:
+                            logger.warning(
+                                f"Stream idle timeout after {idle_timeout}s",
+                                extra={"model": self.model},
+                            )
+                            raise StreamIdleTimeoutError(idle_timeout)
+                except StopAsyncIteration:
+                    break
+
+                line = _normalize_stream_line(raw_line)
                 if not line:
                     continue
                 line_count += 1
@@ -380,6 +418,7 @@ class StreamProcessor(BaseProcessor):
                 if (token := resp.get("token")) is not None:
                     if not token:
                         continue
+                    first_token_received = True
                     filtered = self._filter_token(token)
                     if not filtered:
                         continue
