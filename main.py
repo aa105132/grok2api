@@ -50,12 +50,17 @@ async def lifespan(app: FastAPI):
     # 2. 加载配置
     await config.load()
 
-    # 3. 启动服务显示
+    # 3. 加载自定义模型（合并配置中的 [[models]] 到内置模型列表）
+    from app.services.grok.models.model import ModelService
+
+    ModelService.load_from_config()
+
+    # 4. 启动服务显示
     logger.info("Starting Grok2API...")
     logger.info(f"Platform: {platform.system()} {platform.release()}")
     logger.info(f"Python: {sys.version.split()[0]}")
 
-    # 4. 启动 Token 刷新调度器
+    # 5. 启动 Token 刷新调度器
     refresh_enabled = get_config("token.auto_refresh", True)
     if refresh_enabled:
         basic_interval = get_config("token.refresh_interval_hours", 8)

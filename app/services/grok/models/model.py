@@ -1,12 +1,16 @@
 """
 Grok 模型管理服务
+
+支持内置模型 + 配置文件自定义模型，配置中的模型可覆盖同 ID 的内置模型。
+通过 config.toml 的 [[models]] 段落添加新模型，无需修改代码。
 """
 
 from enum import Enum
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Dict
 from pydantic import BaseModel, Field
 
 from app.core.exceptions import ValidationException
+from app.core.logger import logger
 
 
 class Tier(str, Enum):
@@ -38,9 +42,20 @@ class ModelInfo(BaseModel):
 
 
 class ModelService:
-    """模型管理服务"""
+    """
+    模型管理服务
 
-    MODELS = [
+    内置模型列表 (BUILTIN_MODELS) 作为基线，配置文件中的自定义模型
+    会在启动时合并进来。相同 model_id 时配置文件优先（覆盖内置）。
+
+    使用方法：
+    1. 在 config.toml 中添加 [[models]] 段落定义新模型
+    2. 应用启动时自动调用 load_from_config() 合并
+    3. 运行时可通过 reload() 重新加载
+    """
+
+    # 内置模型（基线，始终可用）
+    BUILTIN_MODELS = [
         ModelInfo(
             model_id="grok-3",
             grok_model="grok-3",
@@ -99,25 +114,25 @@ class ModelService:
             display_name="GROK-4.1-MINI",
         ),
         ModelInfo(
-            model_id="grok-4.1-fast",
-            grok_model="grok-4-1-thinking-1129",
+            model_id="grok-4.20-fast",
+            grok_model="grok-420",
             model_mode="MODEL_MODE_FAST",
             cost=Cost.LOW,
-            display_name="GROK-4.1-FAST",
+            display_name="GROK-4.20-FAST",
         ),
         ModelInfo(
-            model_id="grok-4.1-expert",
-            grok_model="grok-4-1-thinking-1129",
+            model_id="grok-4.20-expert",
+            grok_model="grok-420",
             model_mode="MODEL_MODE_EXPERT",
             cost=Cost.HIGH,
-            display_name="GROK-4.1-EXPERT",
+            display_name="GROK-4.20-EXPERT",
         ),
         ModelInfo(
-            model_id="grok-4.1-thinking",
+            model_id="grok-4.20",
             grok_model="grok-4-1-thinking-1129",
-            model_mode="MODEL_MODE_GROK_4_1_THINKING",
+            model_mode="MODEL_MODE_GROK_420",
             cost=Cost.HIGH,
-            display_name="GROK-4.1-THINKING",
+            display_name="GROK-4.20",
         ),
         ModelInfo(
             model_id="grok-imagine-1.0",
@@ -148,7 +163,97 @@ class ModelService:
         ),
     ]
 
-    _map = {m.model_id: m for m in MODELS}
+    # 兼容旧引用
+    MODELS = BUILTIN_MODELS
+
+    _map: Dict[str, ModelInfo] = {m.model_id: m for m in BUILTIN_MODELS}
+
+    @classmethod
+    def load_from_config(cls) -> None:
+        """
+        从配置中加载自定义模型并合并到模型注册表
+
+        配置格式 (config.toml):
+            [[models]]
+            model_id = "grok-5"
+            grok_model = "grok-5"
+            model_mode = "MODEL_MODE_GROK_5"
+            cost = "low"
+            tier = "basic"
+            display_name = "GROK-5"
+
+        自定义模型会覆盖同 model_id 的内置模型。
+        """
+        from app.core.config import get_config
+
+        custom_models_config = get_config("models", [])
+        if not custom_models_config:
+            logger.debug("No custom models in config, using built-in models only.")
+            # 确保 _map 基于内置模型重建（处理 reload 场景）
+            cls._map = {m.model_id: m for m in cls.BUILTIN_MODELS}
+            return
+
+        if not isinstance(custom_models_config, list):
+            logger.warning(
+                "Config 'models' should be an array of tables ([[models]]), skipping."
+            )
+            cls._map = {m.model_id: m for m in cls.BUILTIN_MODELS}
+            return
+
+        # 以内置模型为基础
+        merged: Dict[str, ModelInfo] = {m.model_id: m for m in cls.BUILTIN_MODELS}
+        loaded_count = 0
+        overridden_count = 0
+
+        for idx, model_cfg in enumerate(custom_models_config):
+            if not isinstance(model_cfg, dict):
+                logger.warning(f"Custom model #{idx}: expected dict, got {type(model_cfg).__name__}, skipping.")
+                continue
+
+            # 必填字段检查
+            model_id = model_cfg.get("model_id")
+            if not model_id:
+                logger.warning(f"Custom model #{idx}: missing 'model_id', skipping.")
+                continue
+
+            try:
+                model_info = ModelInfo(
+                    model_id=model_cfg["model_id"],
+                    grok_model=model_cfg.get("grok_model", model_cfg["model_id"]),
+                    model_mode=model_cfg.get("model_mode", "MODEL_MODE_FAST"),
+                    tier=Tier(model_cfg.get("tier", "basic")),
+                    cost=Cost(model_cfg.get("cost", "low")),
+                    display_name=model_cfg.get("display_name", model_cfg["model_id"].upper()),
+                    description=model_cfg.get("description", ""),
+                    is_video=model_cfg.get("is_video", False),
+                    is_image=model_cfg.get("is_image", False),
+                )
+
+                is_override = model_id in merged
+                merged[model_id] = model_info
+                loaded_count += 1
+                if is_override:
+                    overridden_count += 1
+                    logger.debug(f"Custom model '{model_id}' overrides built-in model.")
+                else:
+                    logger.debug(f"Custom model '{model_id}' registered.")
+
+            except Exception as e:
+                logger.warning(f"Custom model #{idx} ('{model_id}'): invalid config - {e}, skipping.")
+                continue
+
+        cls._map = merged
+        logger.info(
+            f"Model registry loaded: {len(cls.BUILTIN_MODELS)} built-in + "
+            f"{loaded_count} custom ({overridden_count} overrides) = "
+            f"{len(cls._map)} total models."
+        )
+
+    @classmethod
+    def reload(cls) -> None:
+        """重新加载模型配置（运行时热重载）"""
+        logger.info("Reloading model registry...")
+        cls.load_from_config()
 
     @classmethod
     def get(cls, model_id: str) -> Optional[ModelInfo]:

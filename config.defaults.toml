@@ -150,3 +150,40 @@ nsfw_batch_size = 50
 # NSFW 单次最大数量
 nsfw_max_tokens = 1000
 
+
+# ==================== 自定义模型 ====================
+# 通过 [[models]] 添加新模型或覆盖内置模型，无需修改代码
+# 当 Grok 发布新模型时，在此处添加即可立即生效
+#
+# 必填字段：
+#   model_id      - 模型 ID（对外暴露的名称，如 "grok-5"）
+#
+# 可选字段（有默认值）：
+#   grok_model    - Grok 内部模型名（默认与 model_id 相同）
+#   model_mode    - 模型模式（默认 "MODEL_MODE_FAST"）
+#   tier          - 模型档位："basic" 或 "super"（默认 "basic"）
+#   cost          - 计费类型："low" 或 "high"（默认 "low"）
+#   display_name  - 显示名称（默认为 model_id 大写）
+#   description   - 模型描述（默认为空）
+#   is_image      - 是否为图片模型（默认 false）
+#   is_video      - 是否为视频模型（默认 false）
+#
+# 示例：添加一个新的 grok-5 模型
+# [[models]]
+# model_id = "grok-5"
+# grok_model = "grok-5"
+# model_mode = "MODEL_MODE_GROK_5"
+# cost = "low"
+# tier = "basic"
+# display_name = "GROK-5"
+#
+# 示例：添加一个 super 档位的模型
+# [[models]]
+# model_id = "grok-5-heavy"
+# grok_model = "grok-5"
+# model_mode = "MODEL_MODE_HEAVY"
+# cost = "high"
+# tier = "super"
+# display_name = "GROK-5-HEAVY"
+# description = "Heavy reasoning model"
+

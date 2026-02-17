@@ -6,6 +6,8 @@ Grok 服务默认配置
 
 # Grok 服务默认配置
 GROK_DEFAULTS = {
+    # 自定义模型列表（默认为空，通过 [[models]] 配置段添加）
+    "models": [],
     "app": {
         "app_url": "",
         "app_key": "grok2api",
