@@ -259,75 +259,22 @@ class StreamProcessor(BaseProcessor):
     async def process(
         self, response: AsyncIterable[bytes]
     ) -> AsyncGenerator[str, None]:
-        """处理流式响应，支持 SSE 心跳保活"""
+        """处理流式响应"""
         idle_timeout = get_config("timeout.stream_idle_timeout")
-        # 心跳间隔（秒），防止客户端在等待 Grok 思考时超时断开
-        heartbeat_interval = 5.0
 
-        line_count = 0
-        first_token_received = False
-        total_idle = 0.0  # 累计空闲时间，用于触发全局 idle timeout
         try:
-            iterator = response.__aiter__()
-            while True:
-                try:
-                    if not first_token_received and self.role_sent:
-                        # 在等待第一个 token 期间，使用较短的超时并发送心跳保活
-                        try:
-                            raw_line = await asyncio.wait_for(
-                                iterator.__anext__(), timeout=heartbeat_interval
-                            )
-                            total_idle = 0.0  # 收到数据，重置空闲计时
-                        except asyncio.TimeoutError:
-                            total_idle += heartbeat_interval
-                            if total_idle >= idle_timeout:
-                                logger.warning(
-                                    f"Stream idle timeout after {idle_timeout}s (heartbeat mode)",
-                                    extra={"model": self.model},
-                                )
-                                raise StreamIdleTimeoutError(idle_timeout)
-                            yield ": heartbeat\n\n"
-                            continue
-                    else:
-                        # 正常模式：使用全局 idle timeout
-                        try:
-                            raw_line = await asyncio.wait_for(
-                                iterator.__anext__(), timeout=idle_timeout
-                            )
-                        except asyncio.TimeoutError:
-                            logger.warning(
-                                f"Stream idle timeout after {idle_timeout}s",
-                                extra={"model": self.model},
-                            )
-                            raise StreamIdleTimeoutError(idle_timeout)
-                except StopAsyncIteration:
-                    break
-
-                line = _normalize_stream_line(raw_line)
+            async for line in _with_idle_timeout(
+                response, idle_timeout, self.model
+            ):
+                line = _normalize_stream_line(line)
                 if not line:
                     continue
-                line_count += 1
                 try:
                     data = orjson.loads(line)
                 except orjson.JSONDecodeError:
-                    logger.warning(f"[StreamDebug] line#{line_count} JSON parse failed: {line[:200]}")
                     continue
 
                 resp = data.get("result", {}).get("response", {})
-                if not resp:
-                    logger.info(f"[StreamDebug] line#{line_count} no resp, keys={list(data.keys())}, data={str(data)[:500]}")
-                    continue
-
-                # 记录每行的 resp keys 便于调试 grok-420
-                resp_keys = list(resp.keys())
-                has_token = "token" in resp
-                token_val = repr(resp.get("token", ""))[:100] if has_token else "N/A"
-                user_resp = resp.get("userResponse")
-                user_resp_str = str(user_resp)[:200] if user_resp else "N/A"
-                is_soft_stop = resp.get("isSoftStop")
-                logger.info(f"[StreamDebug] line#{line_count} resp_keys={resp_keys}, has_token={has_token}, token={token_val}, isThinking={resp.get('isThinking')}, isSoftStop={is_soft_stop}, userResponse={user_resp_str}")
-
-                # 使用上游的 isThinking 字段判断思维链状态
                 is_thinking = bool(resp.get("isThinking"))
 
                 if (llm := resp.get("llmInfo")) and not self.fingerprint:
@@ -394,7 +341,7 @@ class StreamProcessor(BaseProcessor):
                         self.fingerprint = meta["llm_info"]["modelHash"]
                     continue
 
-                # cardAttachment（上游支持的搜索结果卡片）
+                # cardAttachment（搜索结果卡片）
                 if card := resp.get("cardAttachment"):
                     json_data = card.get("jsonData")
                     if isinstance(json_data, str) and json_data.strip():
@@ -418,7 +365,6 @@ class StreamProcessor(BaseProcessor):
                 if (token := resp.get("token")) is not None:
                     if not token:
                         continue
-                    first_token_received = True
                     filtered = self._filter_token(token)
                     if not filtered:
                         continue
@@ -434,13 +380,12 @@ class StreamProcessor(BaseProcessor):
                             self.think_opened = False
                     yield self._sse(filtered)
 
-            logger.info(f"[StreamDebug] Stream ended normally: total_lines={line_count}, role_sent={self.role_sent}, think_opened={self.think_opened}, model={self.model}")
             if self.think_opened:
                 yield self._sse("</think>\n")
             yield self._sse(finish="stop")
             yield "data: [DONE]\n\n"
         except asyncio.CancelledError:
-            logger.warning(f"[StreamDebug] Stream CANCELLED by client: total_lines={line_count}, role_sent={self.role_sent}, model={self.model}")
+            logger.debug("Stream cancelled by client", extra={"model": self.model})
         except StreamIdleTimeoutError as e:
             raise UpstreamException(
                 message=f"Stream idle timeout after {e.idle_seconds}s",
