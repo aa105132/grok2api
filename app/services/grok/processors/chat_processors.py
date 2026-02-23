@@ -29,7 +29,6 @@ def extract_tool_text(raw: str, rollout_id: str = "") -> str:
     支持的工具类型:
     - web_search -> [WebSearch]
     - search_images -> [SearchImage]
-    - chatroom_send -> [AgentThink]
 
     Args:
         raw: 原始 XML 内容（包含 xai:tool_usage_card 标签）
@@ -62,16 +61,20 @@ def extract_tool_text(raw: str, rollout_id: str = "") -> str:
         except orjson.JSONDecodeError:
             payload = None
 
-    label = name
-    text = args
     prefix = f"[{rollout_id}]" if rollout_id else ""
 
     if name == "web_search":
         label = f"{prefix}[WebSearch]"
+        text = args
         if isinstance(payload, dict):
             text = payload.get("query") or payload.get("q") or ""
-    elif name == "search_images":
+        if label and text:
+            return f"{label} {text}".strip()
+        return label
+
+    if name == "search_images":
         label = f"{prefix}[SearchImage]"
+        text = args
         if isinstance(payload, dict):
             text = (
                 payload.get("image_description")
@@ -79,19 +82,11 @@ def extract_tool_text(raw: str, rollout_id: str = "") -> str:
                 or payload.get("query")
                 or ""
             )
-    elif name == "chatroom_send":
-        label = f"{prefix}[AgentThink]"
-        if isinstance(payload, dict):
-            text = payload.get("message") or ""
-
-    if label and text:
-        return f"{label} {text}".strip()
-    if label:
+        if label and text:
+            return f"{label} {text}".strip()
         return label
-    if text:
-        return text
-    # Fallback: 去除标签保留原始文本
-    return re.sub(r"<[^>]+>", "", raw, flags=re.DOTALL).strip()
+
+    return ""
 
 
 class StreamProcessor(BaseProcessor):
