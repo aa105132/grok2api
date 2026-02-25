@@ -6,7 +6,7 @@ import re
 import time
 import uuid
 import orjson
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 
 from curl_cffi.requests import AsyncSession
@@ -44,6 +44,8 @@ class ChatRequest:
     messages: List[Dict[str, Any]]
     stream: bool = None
     think: bool = None
+    tools: Optional[List[Dict[str, Any]]] = None
+    tool_choice: Optional[Any] = None
 
 
 class MessageExtractor:
@@ -70,11 +72,40 @@ class MessageExtractor:
         return message, results
 
     @staticmethod
+    def _render_tool_definitions(tools: List[Dict[str, Any]]) -> str:
+        return (
+            "<工具定义>\n"
+            "以下为可用工具（仅可调用下列函数）：\n"
+            f"{orjson.dumps(tools).decode('utf-8')}"
+        )
+
+    @staticmethod
+    def _render_tool_call_output_format(prefix: str) -> str:
+        return (
+            "<工具调用输出格式>\n"
+            f"当你决定调用工具时，你必须输出以 `{prefix}` 开头的 JSON，且不输出其他自然语言。\n"
+            "格式示例：\n"
+            f"{prefix}"
+            "{\"tool_calls\":[{\"id\":\"call_xxx\",\"type\":\"function\",\"function\":{\"name\":\"your_tool\",\"arguments\":{\"k\":\"v\"}}}]}"
+        )
+
+    @staticmethod
+    def _render_required_tool_call_instruction(tool_choice: Any) -> str:
+        if isinstance(tool_choice, dict):
+            name = ((tool_choice.get("function") or {}).get("name") or "").strip()
+            if name:
+                return f"你必须调用工具 `{name}`，不要输出普通文本。"
+        return "你必须调用一个工具完成本轮回答，不要输出普通文本。"
+
+    @staticmethod
     def extract(
-        messages: List[Dict[str, Any]], is_video: bool = False
+        messages: List[Dict[str, Any]],
+        is_video: bool = False,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Any] = None,
+        tool_call_prefix: Optional[str] = None,
     ) -> tuple[str, List[tuple[str, str]]]:
         """从 OpenAI 消息格式提取内容，返回 (text, attachments)"""
-        texts = []
         attachments = []
         extracted = []
 
@@ -85,18 +116,20 @@ class MessageExtractor:
 
             if isinstance(content, str):
                 if content.strip():
-                    msg, urls = MessageExtractor.extract_url_from_message(content)
-                    parts.append(msg)
-                    attachments.extend([ ("image", url) for url in urls ])
+                    msg_text, urls = MessageExtractor.extract_url_from_message(content)
+                    if msg_text.strip():
+                        parts.append(msg_text)
+                    attachments.extend([("image", url) for url in urls])
             elif isinstance(content, list):
                 for item in content:
                     item_type = item.get("type", "")
 
                     if item_type == "text":
                         if text := item.get("text", "").strip():
-                            msg, urls = MessageExtractor.extract_url_from_message(text)
-                            parts.append(msg)
-                            attachments.extend([ ("image", url) for url in urls ])
+                            msg_text, urls = MessageExtractor.extract_url_from_message(text)
+                            if msg_text.strip():
+                                parts.append(msg_text)
+                            attachments.extend([("image", url) for url in urls])
 
                     elif item_type == "image_url":
                         image_data = item.get("image_url", {})
@@ -131,7 +164,13 @@ class MessageExtractor:
                             attachments.append(("file", url))
 
             if parts:
-                extracted.append({"role": role, "text": "\n".join(parts)})
+                extracted.append(
+                    {
+                        "role": role,
+                        "text": "\n".join(parts),
+                        "tool_call_id": msg.get("tool_call_id"),
+                    }
+                )
 
         # 找到最后一条 user 消息
         last_user_index = next(
@@ -143,12 +182,50 @@ class MessageExtractor:
             None,
         )
 
+        envelope: List[str] = []
         for i, item in enumerate(extracted):
-            role = item["role"] or "user"
+            role = (item["role"] or "user").strip() or "user"
             text = item["text"]
-            texts.append(text if i == last_user_index else f"{role}: {text}")
+            if i == last_user_index:
+                continue
 
-        return "\n\n".join(texts), attachments
+            if role == "tool":
+                tcid = (item.get("tool_call_id") or "").strip()
+                role = f"tool[{tcid}]" if tcid else "tool"
+            envelope.append(f"{role}: {text}")
+
+        last_user_text = (
+            extracted[last_user_index]["text"]
+            if last_user_index is not None
+            else ""
+        )
+
+        tools = tools or []
+        prefix = tool_call_prefix or get_config("chat.tool_call_prefix", "<|tool_call|>")
+
+        inject_tools = True
+        inject_output_format = True
+        append_required_hint = False
+
+        if tool_choice == "none":
+            inject_tools = False
+            inject_output_format = False
+        elif tool_choice == "required":
+            append_required_hint = True
+
+        if inject_tools and tools:
+            envelope.append(MessageExtractor._render_tool_definitions(tools))
+
+        if inject_output_format and tools:
+            envelope.append(MessageExtractor._render_tool_call_output_format(prefix))
+
+        if last_user_text:
+            envelope.append(last_user_text)
+
+        if append_required_hint and tools:
+            envelope.append(MessageExtractor._render_required_tool_call_instruction(tool_choice))
+
+        return "\n\n".join(envelope), attachments
 
 
 class ChatRequestBuilder:
@@ -369,7 +446,11 @@ class GrokChatService:
         # 提取消息和附件
         try:
             message, attachments = MessageExtractor.extract(
-                request.messages, is_video=is_video
+                request.messages,
+                is_video=is_video,
+                tools=request.tools,
+                tool_choice=request.tool_choice,
+                tool_call_prefix=get_config("chat.tool_call_prefix", "<|tool_call|>"),
             )
             logger.debug(
                 f"Extracted message length={len(message)}, attachments={len(attachments)}"
@@ -417,7 +498,9 @@ class ChatService:
         messages: List[Dict[str, Any]],
         stream: bool = None,
         thinking: str = None,
-        n: int = 1
+        n: int = 1,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Any] = None,
     ):
         """Chat Completions 入口"""
         # 获取 token
@@ -430,7 +513,12 @@ class ChatService:
 
         # 构造请求（只需构造一次）
         chat_request = ChatRequest(
-            model=model, messages=messages, stream=is_stream, think=think
+            model=model,
+            messages=messages,
+            stream=is_stream,
+            think=think,
+            tools=tools or [],
+            tool_choice=tool_choice,
         )
 
         # 跨 Token 重试循环
@@ -484,14 +572,25 @@ class ChatService:
                 # 处理响应
                 if is_stream:
                     logger.debug(f"Processing stream response: model={model}")
-                    processor = StreamProcessor(model_name, token, think)
+                    processor = StreamProcessor(
+                        model_name,
+                        token,
+                        think,
+                        tools=chat_request.tools,
+                        tool_choice=chat_request.tool_choice,
+                    )
                     return wrap_stream_with_usage(
                         processor.process(response), token_mgr, token, model
                     )
 
                 # 非流式
                 logger.debug(f"Processing non-stream response: model={model}")
-                result = await CollectProcessor(model_name, token).process(response)
+                result = await CollectProcessor(
+                    model_name,
+                    token,
+                    tools=chat_request.tools,
+                    tool_choice=chat_request.tool_choice,
+                ).process(response)
                 try:
                     effort = (
                         EffortType.HIGH

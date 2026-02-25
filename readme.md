@@ -132,6 +132,8 @@ curl http://localhost:8000/v1/chat/completions \
 | `messages`            | array   | 消息列表                       | 见下方消息格式                                |
 | `stream`              | boolean | 是否开启流式输出               | `true`, `false`                           |
 | `thinking`            | string  | 思维链模式                     | `enabled`, `disabled`, `null`           |
+| `tools`               | array   | 工具定义（OpenAI 兼容）        | 仅支持 `type=function`                        |
+| `tool_choice`         | string/object | 工具调用策略（OpenAI 兼容） | `auto`, `none`, `required`, 或指定函数对象 |
 | `video_config`        | object  | **视频模型专用配置对象** | -                                             |
 | └─`aspect_ratio`    | string  | 视频宽高比                     | `16:9`, `9:16`, `1:1`, `2:3`, `3:2` |
 | └─`video_length`    | integer | 视频时长 (秒)                  | `6`, `10`, `15`                         |
@@ -142,8 +144,9 @@ curl http://localhost:8000/v1/chat/completions \
 
 | 字段        | 类型         | 说明                                                     |
 | :---------- | :----------- | :------------------------------------------------------- |
-| `role`    | string       | 角色：`developer`, `system`, `user`, `assistant` |
+| `role`    | string       | 角色：`developer`, `system`, `user`, `assistant`, `tool` |
 | `content` | string/array | 消息内容，支持纯文本或多模态数组                         |
+| `tool_call_id` | string | 当 `role=tool` 时必填，用于关联工具调用结果 |
 
 **多模态内容块类型 (content array)**：
 

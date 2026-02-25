@@ -46,6 +46,12 @@ thinking = true
 dynamic_statsig = true
 # 过滤的特殊标签列表
 filter_tags = ["xaiartifact","xai:tool_usage_card","grok:render"]
+# 是否启用工具调用协议模拟（仅协议映射，不执行工具）
+tool_call_simulation_enabled = true
+# 工具调用前缀门控
+tool_call_prefix = "<|tool_call|>"
+# 工具调用严格模式（解析失败时直接报错）
+tool_call_strict = true
 
 
 # ==================== 重试策略 ====================

@@ -30,6 +30,9 @@ GROK_DEFAULTS = {
         "thinking": False,
         "dynamic_statsig": True,
         "filter_tags": ["grok:render", "xaiartifact", "xai:tool_usage_card"],
+        "tool_call_simulation_enabled": True,
+        "tool_call_prefix": "<|tool_call|>",
+        "tool_call_strict": True,
     },
     "retry": {
         "max_retry": 3,

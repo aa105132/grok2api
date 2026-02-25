@@ -13,6 +13,7 @@ from curl_cffi.requests.errors import RequestsError
 from app.core.config import get_config
 from app.core.logger import logger
 from app.core.exceptions import UpstreamException
+from app.services.grok.tool_calls import ToolCallPlanner
 from .base import (
     BaseProcessor,
     StreamIdleTimeoutError,
@@ -26,7 +27,14 @@ from .base import (
 class StreamProcessor(BaseProcessor):
     """流式响应处理器"""
 
-    def __init__(self, model: str, token: str = "", think: bool = None):
+    def __init__(
+        self,
+        model: str,
+        token: str = "",
+        think: bool = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any = None,
+    ):
         super().__init__(model, token)
         self.response_id: str = None
         self.fingerprint: str = ""
@@ -36,6 +44,26 @@ class StreamProcessor(BaseProcessor):
         self.image_format = get_config("app.image_format")
         self._tag_buffer: str = ""
         self._in_filter_tag: bool = False
+        self.tools = tools or []
+        self.tool_choice = tool_choice
+        self.tool_call_simulation_enabled = bool(
+            get_config("chat.tool_call_simulation_enabled", True)
+        )
+        self.tool_call_prefix = get_config("chat.tool_call_prefix", "<|tool_call|>")
+        self.tool_call_strict = bool(get_config("chat.tool_call_strict", True))
+        self._tool_planner = ToolCallPlanner(
+            prefix=self.tool_call_prefix,
+            strict=self.tool_call_strict,
+        )
+        self._tool_branch_enabled = (
+            self.tool_call_simulation_enabled
+            and bool(self.tools)
+            and self.tool_choice != "none"
+        )
+        self._tool_mode_determined = not self._tool_branch_enabled
+        self._tool_mode_enabled = False
+        self._tool_gate_buffer = ""
+        self._tool_raw_buffer = ""
 
         if think is None:
             self.show_think = get_config("chat.thinking")
@@ -97,9 +125,10 @@ class StreamProcessor(BaseProcessor):
         role: str = None,
         finish: str = None,
         reasoning_content: str = None,
+        tool_calls: list[dict[str, Any]] | None = None,
     ) -> str:
         """构建 SSE 响应"""
-        delta = {}
+        delta: dict[str, Any] = {}
         if role:
             delta["role"] = role
             delta["content"] = ""
@@ -107,6 +136,8 @@ class StreamProcessor(BaseProcessor):
             delta["reasoning_content"] = reasoning_content
         elif content:
             delta["content"] = content
+        if tool_calls is not None:
+            delta["tool_calls"] = tool_calls
 
         chunk = {
             "id": self.response_id or f"chatcmpl-{uuid.uuid4().hex[:24]}",
@@ -119,6 +150,48 @@ class StreamProcessor(BaseProcessor):
             ],
         }
         return f"data: {orjson.dumps(chunk).decode()}\n\n"
+
+    def _yield_tool_call_delta_chunks(
+        self, tool_calls: list[dict[str, Any]]
+    ) -> list[str]:
+        chunks: list[str] = []
+        for idx, call in enumerate(tool_calls):
+            call_id = str(call.get("id", ""))
+            fn = call.get("function", {}) if isinstance(call.get("function"), dict) else {}
+            fn_name = str(fn.get("name", ""))
+            fn_args = str(fn.get("arguments", ""))
+
+            chunks.append(
+                self._sse(
+                    tool_calls=[
+                        {
+                            "index": idx,
+                            "id": call_id,
+                            "type": "function",
+                            "function": {"name": fn_name, "arguments": ""},
+                        }
+                    ]
+                )
+            )
+
+            if fn_args:
+                step = 64
+                for i in range(0, len(fn_args), step):
+                    part = fn_args[i : i + step]
+                    chunks.append(
+                        self._sse(
+                            tool_calls=[
+                                {
+                                    "index": idx,
+                                    "function": {"arguments": part},
+                                }
+                            ]
+                        )
+                    )
+
+        chunks.append(self._sse(finish="tool_calls"))
+        chunks.append("data: [DONE]\n\n")
+        return chunks
 
     async def process(
         self, response: AsyncIterable[bytes]
@@ -142,6 +215,42 @@ class StreamProcessor(BaseProcessor):
                     self.fingerprint = llm.get("modelHash", "")
                 if rid := resp.get("responseId"):
                     self.response_id = rid
+
+                token = resp.get("token")
+                if token is None:
+                    token = ""
+
+                if self._tool_branch_enabled and not self._tool_mode_determined and token:
+                    self._tool_gate_buffer += token
+                    gate_trimmed = self._tool_gate_buffer.lstrip()
+
+                    # 命中前缀：进入 tool 分支
+                    if gate_trimmed.startswith(self.tool_call_prefix):
+                        self._tool_mode_enabled = True
+                        self._tool_mode_determined = True
+                        self._tool_raw_buffer = self._tool_gate_buffer
+                        continue
+
+                    # 仍可能是前缀的部分片段：继续等待
+                    if self.tool_call_prefix.startswith(gate_trimmed):
+                        continue
+
+                    # 明确不是前缀：回落到普通文本，并先冲刷缓冲
+                    self._tool_mode_enabled = False
+                    self._tool_mode_determined = True
+                    if not self.role_sent:
+                        yield self._sse(role="assistant")
+                        self.role_sent = True
+                    buffered = self._filter_token(self._tool_gate_buffer)
+                    if buffered:
+                        yield self._sse(buffered)
+                    self._tool_gate_buffer = ""
+                    continue
+
+                if self._tool_branch_enabled and self._tool_mode_enabled:
+                    if token:
+                        self._tool_raw_buffer += token
+                    continue
 
                 if not self.role_sent:
                     yield self._sse(role="assistant")
@@ -203,11 +312,32 @@ class StreamProcessor(BaseProcessor):
                     continue
 
                 # 普通 token
-                if (token := resp.get("token")) is not None:
-                    if token:
-                        filtered = self._filter_token(token)
-                        if filtered:
-                            yield self._sse(filtered)
+                if token:
+                    filtered = self._filter_token(token)
+                    if filtered:
+                        yield self._sse(filtered)
+
+            if self._tool_branch_enabled and self._tool_mode_enabled:
+                plan = self._tool_planner.plan(
+                    self._tool_raw_buffer,
+                    tools=self.tools,
+                    tool_choice=self.tool_choice,
+                )
+                if plan.error and self.tool_call_strict:
+                    raise UpstreamException(
+                        message=f"Invalid tool call payload: {plan.error}",
+                        details={"error": plan.error, "type": "invalid_tool_call_payload"},
+                    )
+                if plan.is_tool_call and plan.tool_calls:
+                    if not self.role_sent:
+                        yield self._sse(role="assistant")
+                        self.role_sent = True
+                    chunks = self._yield_tool_call_delta_chunks(
+                        [tc.to_openai_dict() for tc in plan.tool_calls]
+                    )
+                    for item in chunks:
+                        yield item
+                    return
 
             if self.think_opened:
                 self.think_opened = False
@@ -252,10 +382,27 @@ class StreamProcessor(BaseProcessor):
 class CollectProcessor(BaseProcessor):
     """非流式响应处理器"""
 
-    def __init__(self, model: str, token: str = ""):
+    def __init__(
+        self,
+        model: str,
+        token: str = "",
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any = None,
+    ):
         super().__init__(model, token)
         self.image_format = get_config("app.image_format")
         self.filter_tags = get_config("chat.filter_tags")
+        self.tools = tools or []
+        self.tool_choice = tool_choice
+        self.tool_call_simulation_enabled = bool(
+            get_config("chat.tool_call_simulation_enabled", True)
+        )
+        self.tool_call_prefix = get_config("chat.tool_call_prefix", "<|tool_call|>")
+        self.tool_call_strict = bool(get_config("chat.tool_call_strict", True))
+        self._tool_planner = ToolCallPlanner(
+            prefix=self.tool_call_prefix,
+            strict=self.tool_call_strict,
+        )
 
     def _filter_content(self, content: str) -> str:
         """过滤内容中的特殊标签"""
@@ -274,6 +421,7 @@ class CollectProcessor(BaseProcessor):
         response_id = ""
         fingerprint = ""
         content = ""
+        token_buffer = ""
         idle_timeout = get_config("timeout.stream_idle_timeout")
 
         try:
@@ -290,6 +438,12 @@ class CollectProcessor(BaseProcessor):
 
                 if (llm := resp.get("llmInfo")) and not fingerprint:
                     fingerprint = llm.get("modelHash", "")
+
+                if rid := resp.get("responseId"):
+                    response_id = rid
+
+                if (token := resp.get("token")) is not None and token:
+                    token_buffer += token
 
                 if mr := resp.get("modelResponse"):
                     response_id = mr.get("responseId", "")
@@ -348,7 +502,40 @@ class CollectProcessor(BaseProcessor):
         finally:
             await self.close()
 
+        tool_calls = None
+        raw_tool_text = token_buffer if token_buffer.strip() else content
+        if (
+            self.tool_call_simulation_enabled
+            and self.tools
+            and self.tool_choice != "none"
+            and raw_tool_text.lstrip().startswith(self.tool_call_prefix)
+        ):
+            plan = self._tool_planner.plan(
+                raw_tool_text,
+                tools=self.tools,
+                tool_choice=self.tool_choice,
+            )
+            if plan.error and self.tool_call_strict:
+                raise UpstreamException(
+                    message=f"Invalid tool call payload: {plan.error}",
+                    details={"error": plan.error, "type": "invalid_tool_call_payload"},
+                )
+            if plan.is_tool_call and plan.tool_calls:
+                tool_calls = [tc.to_openai_dict() for tc in plan.tool_calls]
+
         content = self._filter_content(content)
+
+        message: dict[str, Any] = {
+            "role": "assistant",
+            "content": content,
+            "refusal": None,
+            "annotations": [],
+        }
+        finish_reason = "stop"
+        if tool_calls:
+            message["content"] = ""
+            message["tool_calls"] = tool_calls
+            finish_reason = "tool_calls"
 
         return {
             "id": response_id,
@@ -359,13 +546,8 @@ class CollectProcessor(BaseProcessor):
             "choices": [
                 {
                     "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": content,
-                        "refusal": None,
-                        "annotations": [],
-                    },
-                    "finish_reason": "stop",
+                    "message": message,
+                    "finish_reason": finish_reason,
                 }
             ],
             "usage": {

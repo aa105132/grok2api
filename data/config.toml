@@ -22,6 +22,9 @@ stream = true
 thinking = true
 dynamic_statsig = true
 filter_tags = ["xaiartifact","xai:tool_usage_card","grok:render"]
+tool_call_simulation_enabled = true
+tool_call_prefix = "<|tool_call|>"
+tool_call_strict = true
 
 [retry]
 max_retry = 3
