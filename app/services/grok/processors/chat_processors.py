@@ -103,6 +103,9 @@ class StreamProcessor(BaseProcessor):
         self.fingerprint: str = ""
         self.rollout_id: str = ""
         self.think_opened: bool = False
+        self.image_think_active: bool = False
+        self._last_thinking_state: bool = False
+        self.answer_text: str = ""
         self.role_sent: bool = False
         self.filter_tags = get_config("chat.filter_tags")
         self.image_format = get_config("app.image_format")
@@ -256,6 +259,27 @@ class StreamProcessor(BaseProcessor):
         }
         return f"data: {orjson.dumps(chunk).decode()}\n\n"
 
+    def _resolve_thinking_state(self, resp: dict[str, Any]) -> bool:
+        """统一解析 thinking 状态，兼容 isThinking / reasoningStatus。"""
+        if "isThinking" in resp:
+            state = bool(resp.get("isThinking"))
+            self._last_thinking_state = state
+            return state
+
+        status = resp.get("reasoningStatus")
+        if isinstance(status, str):
+            lowered = status.strip().lower()
+            if lowered in {"enabled", "disabled"}:
+                state = lowered == "enabled"
+                self._last_thinking_state = state
+                return state
+
+        # 对 token 事件，若上游未显式带状态，沿用上一段 thinking 状态。
+        if resp.get("token") is not None:
+            return self._last_thinking_state
+
+        return False
+
     async def process(
         self, response: AsyncIterable[bytes]
     ) -> AsyncGenerator[str, None]:
@@ -275,7 +299,7 @@ class StreamProcessor(BaseProcessor):
                     continue
 
                 resp = data.get("result", {}).get("response", {})
-                is_thinking = bool(resp.get("isThinking"))
+                is_thinking = self._resolve_thinking_state(resp)
 
                 if (llm := resp.get("llmInfo")) and not self.fingerprint:
                     self.fingerprint = llm.get("modelHash", "")
@@ -292,12 +316,10 @@ class StreamProcessor(BaseProcessor):
                 if img := resp.get("streamingImageGenerationResponse"):
                     if not self.show_think:
                         continue
-                    if is_thinking and not self.think_opened:
+                    self.image_think_active = True
+                    if not self.think_opened:
                         yield self._sse("<think>\n")
                         self.think_opened = True
-                    if (not is_thinking) and self.think_opened:
-                        yield self._sse("\n</think>\n")
-                        self.think_opened = False
                     idx = img.get("imageIndex", 0) + 1
                     progress = img.get("progress", 0)
                     yield self._sse(
@@ -307,6 +329,40 @@ class StreamProcessor(BaseProcessor):
 
                 # modelResponse
                 if mr := resp.get("modelResponse"):
+                    if self.image_think_active:
+                        self.image_think_active = False
+                    if self.think_opened:
+                        yield self._sse("\n</think>\n")
+                        self.think_opened = False
+
+                    msg = mr.get("message")
+                    if isinstance(msg, str):
+                        final_text = msg.strip()
+                        if final_text:
+                            emitted = self.answer_text.strip()
+                            if not emitted:
+                                yield self._sse(final_text)
+                                self.answer_text = final_text
+                            elif final_text != emitted:
+                                # 优先补齐“已输出前缀 -> 最终完整答案”的差量，避免重复。
+                                if final_text.startswith(emitted):
+                                    suffix = final_text[len(emitted):]
+                                    if suffix:
+                                        yield self._sse(suffix)
+                                        self.answer_text += suffix
+                                elif len(final_text) > len(emitted):
+                                    prefix_len = 0
+                                    max_len = min(len(final_text), len(emitted))
+                                    while (
+                                        prefix_len < max_len
+                                        and final_text[prefix_len] == emitted[prefix_len]
+                                    ):
+                                        prefix_len += 1
+                                    suffix = final_text[prefix_len:]
+                                    if suffix:
+                                        yield self._sse(suffix)
+                                        self.answer_text += suffix
+
                     # 处理生成的图片
                     for url in _collect_image_urls(mr):
                         parts = url.split("/")
@@ -368,7 +424,8 @@ class StreamProcessor(BaseProcessor):
                     filtered = self._filter_token(token)
                     if not filtered:
                         continue
-                    if is_thinking:
+                    in_think = is_thinking or self.image_think_active
+                    if in_think:
                         if not self.show_think:
                             continue
                         if not self.think_opened:
@@ -379,6 +436,13 @@ class StreamProcessor(BaseProcessor):
                             yield self._sse("\n</think>\n")
                             self.think_opened = False
                     yield self._sse(filtered)
+                    if (not in_think) and filtered.strip() and (
+                        not re.match(
+                            r"^(?:\[[^\]]+\])?\[(WebSearch|SearchImage|AgentThink)\]",
+                            filtered.strip(),
+                        )
+                    ):
+                        self.answer_text += filtered
 
             if self.think_opened:
                 yield self._sse("</think>\n")

@@ -102,3 +102,28 @@ def test_stream_processor_supports_enabled_disabled_reasoning_flags():
     assert "推理内容" in text
     assert "</think>" in text
     assert text.endswith("直接答案")
+
+def test_stream_processor_outputs_model_response_message_outside_think_block():
+    responses = [
+        {"responseId": "resp-5", "isThinking": True, "token": "推理中"},
+        {"modelResponse": {"responseId": "resp-5", "message": "最终答复"}},
+    ]
+
+    text = asyncio.run(_run_stream_processor(responses, think=True))
+
+    assert "<think>" in text
+    assert "推理中" in text
+    assert "</think>" in text
+    assert text.endswith("最终答复")
+    assert text.index("</think>") < text.index("最终答复")
+
+
+def test_stream_processor_appends_model_response_suffix_when_token_partial():
+    responses = [
+        {"responseId": "resp-6", "isThinking": False, "token": "你好"},
+        {"modelResponse": {"responseId": "resp-6", "message": "你好，世界"}},
+    ]
+
+    text = asyncio.run(_run_stream_processor(responses, think=True))
+
+    assert text.endswith("你好，世界")
