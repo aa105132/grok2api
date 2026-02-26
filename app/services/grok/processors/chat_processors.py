@@ -503,12 +503,25 @@ class CollectProcessor(BaseProcessor):
             await self.close()
 
         tool_calls = None
-        raw_tool_text = token_buffer if token_buffer.strip() else content
+        raw_tool_text = ""
+
+        # 优先选择命中前缀的候选文本，避免 token_buffer 存在噪声导致误判
+        candidates: list[str] = []
+        if isinstance(token_buffer, str) and token_buffer.strip():
+            candidates.append(token_buffer)
+        if isinstance(content, str) and content.strip():
+            candidates.append(content)
+
+        for candidate in candidates:
+            if candidate.lstrip().startswith(self.tool_call_prefix):
+                raw_tool_text = candidate
+                break
+
         if (
             self.tool_call_simulation_enabled
             and self.tools
             and self.tool_choice != "none"
-            and raw_tool_text.lstrip().startswith(self.tool_call_prefix)
+            and raw_tool_text
         ):
             plan = self._tool_planner.plan(
                 raw_tool_text,
