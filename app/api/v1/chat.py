@@ -371,7 +371,9 @@ async def chat_completions(request: ChatCompletionRequest):
 
     logger.debug(f"Chat request: model={request.model}, stream={request.stream}")
 
-    # 检测视频模型
+    payload_messages = [msg.model_dump() for msg in request.messages]
+
+    # 按模型类型路由到独立服务
     model_info = ModelService.get(request.model)
     if model_info and model_info.is_video:
         from app.services.grok.services.media import VideoService
@@ -381,7 +383,7 @@ async def chat_completions(request: ChatCompletionRequest):
 
         result = await VideoService.completions(
             model=request.model,
-            messages=[msg.model_dump() for msg in request.messages],
+            messages=payload_messages,
             stream=request.stream,
             thinking=request.thinking,
             aspect_ratio=v_conf.aspect_ratio,
@@ -389,10 +391,20 @@ async def chat_completions(request: ChatCompletionRequest):
             resolution=v_conf.resolution_name,
             preset=v_conf.preset,
         )
+    elif model_info and model_info.is_image:
+        from app.services.grok.services.chat_image import ImageChatService
+
+        result = await ImageChatService.completions(
+            model=request.model,
+            messages=payload_messages,
+            stream=request.stream,
+            thinking=request.thinking,
+            n=request.n or 1,
+        )
     else:
         result = await ChatService.completions(
             model=request.model,
-            messages=[msg.model_dump() for msg in request.messages],
+            messages=payload_messages,
             stream=request.stream,
             thinking=request.thinking,
             n=request.n or 1,
