@@ -41,6 +41,7 @@ class ModelService:
     """模型管理服务"""
 
     MODELS = [
+        # deprecated
         ModelInfo(
             model_id="grok-3",
             grok_model="grok-3",
@@ -48,6 +49,7 @@ class ModelService:
             cost=Cost.LOW,
             display_name="GROK-3",
         ),
+        # deprecated
         ModelInfo(
             model_id="grok-3-mini",
             grok_model="grok-3",
@@ -55,6 +57,7 @@ class ModelService:
             cost=Cost.LOW,
             display_name="GROK-3-MINI",
         ),
+        # deprecated
         ModelInfo(
             model_id="grok-3-thinking",
             grok_model="grok-3",
@@ -62,6 +65,7 @@ class ModelService:
             cost=Cost.LOW,
             display_name="GROK-3-THINKING",
         ),
+        # deprecated
         ModelInfo(
             model_id="grok-4",
             grok_model="grok-4",
@@ -69,6 +73,7 @@ class ModelService:
             cost=Cost.LOW,
             display_name="GROK-4",
         ),
+        # deprecated
         ModelInfo(
             model_id="grok-4-mini",
             grok_model="grok-4-mini",
@@ -76,6 +81,7 @@ class ModelService:
             cost=Cost.LOW,
             display_name="GROK-4-MINI",
         ),
+        # deprecated
         ModelInfo(
             model_id="grok-4-thinking",
             grok_model="grok-4",
@@ -83,6 +89,7 @@ class ModelService:
             cost=Cost.LOW,
             display_name="GROK-4-THINKING",
         ),
+        # deprecated
         ModelInfo(
             model_id="grok-4-heavy",
             grok_model="grok-4",
@@ -91,6 +98,7 @@ class ModelService:
             tier=Tier.SUPER,
             display_name="GROK-4-HEAVY",
         ),
+        # deprecated
         ModelInfo(
             model_id="grok-4.1-mini",
             grok_model="grok-4-1-thinking-1129",
@@ -146,6 +154,7 @@ class ModelService:
             cost=Cost.HIGH,
             display_name="GROK-4.20",
         ),
+        # deprecated
         ModelInfo(
             model_id="grok-4.1-fast",
             grok_model="grok-4-1-thinking-1129",
@@ -153,6 +162,7 @@ class ModelService:
             cost=Cost.LOW,
             display_name="GROK-4.1-FAST",
         ),
+        # deprecated
         ModelInfo(
             model_id="grok-4.1-expert",
             grok_model="grok-4-1-thinking-1129",
@@ -160,6 +170,7 @@ class ModelService:
             cost=Cost.HIGH,
             display_name="GROK-4.1-EXPERT",
         ),
+        # deprecated
         ModelInfo(
             model_id="grok-4.1-thinking",
             grok_model="grok-4-1-thinking-1129",

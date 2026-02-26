@@ -91,17 +91,14 @@ docker compose up -d
 
 | 模型名                     | 计次 | 可用账号    | 对话功能 | 图像功能 | 视频功能 |
 | :------------------------- | :--: | :---------- | :------: | :------: | :------: |
-| `grok-3`                 |  1  | Basic/Super |   支持   |   支持   |    -    |
-| `grok-3-fast`            |  1  | Basic/Super |   支持   |   支持   |    -    |
-| `grok-4`                 |  1  | Basic/Super |   支持   |   支持   |    -    |
-| `grok-4-mini`            |  1  | Basic/Super |   支持   |   支持   |    -    |
-| `grok-4-fast`            |  1  | Basic/Super |   支持   |   支持   |    -    |
-| `grok-4-heavy`           |  4  | Super       |   支持   |   支持   |    -    |
-| `grok-4.1`               |  1  | Basic/Super |   支持   |   支持   |    -    |
-| `grok-4.1-thinking`      |  4  | Basic/Super |   支持   |   支持   |    -    |
+| `grok-4.20-fast`         |  1  | Basic/Super |   支持   |   支持   |    -    |
+| `grok-4.20`              |  4  | Basic/Super |   支持   |   支持   |    -    |
+| `grok-4.20-expert`       |  4  | Basic/Super |   支持   |   支持   |    -    |
 | `grok-imagine-1.0`       |  4  | Basic/Super |    -    |   支持   |    -    |
 | `grok-imagine-1.0-edit`  |  4  | Basic/Super |    -    |   支持   |    -    |
 | `grok-imagine-1.0-video` |  -  | Basic/Super |    -    |    -    |   支持   |
+
+> 说明：已弃用模型（如 `grok-3`、`grok-4`、`grok-4.1-*` 等）仍保持兼容，请求会被上游重定向，文档中不再单独列出。
 
 <br>
 
