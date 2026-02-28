@@ -21,7 +21,11 @@ from app.services.grok.models.model import ModelService
 from app.services.grok.services.assets import UploadService
 from app.services.grok.processors import StreamProcessor, CollectProcessor
 from app.services.grok.utils.retry import retry_on_status
-from app.services.grok.utils.headers import apply_statsig, build_sso_cookie
+from app.services.grok.utils.headers import (
+    apply_statsig,
+    build_sso_cookie,
+    find_non_latin1_char,
+)
 from app.services.grok.utils.stream import wrap_stream_with_usage
 from app.services.token import get_token_manager, EffortType
 
@@ -224,6 +228,25 @@ class ChatRequestBuilder:
     """请求构造器"""
 
     @staticmethod
+    def ensure_latin1_headers(headers: Dict[str, str], token: str) -> None:
+        """校验 header 值是否可被 latin-1 编码，便于定位脏数据。"""
+        for key, value in headers.items():
+            if not isinstance(value, str):
+                continue
+            bad = find_non_latin1_char(value)
+            if bad:
+                idx, ch = bad
+                code = f"U+{ord(ch):04X}"
+                token_hint = (token or "")[:10]
+                logger.error(
+                    "Invalid header encoding detected: "
+                    f"header={key}, index={idx}, char={repr(ch)}, code={code}, token={token_hint}..."
+                )
+                raise ValueError(
+                    f"header '{key}' contains non-latin1 char {code} at index {idx}"
+                )
+
+    @staticmethod
     def build_headers(token: str) -> Dict[str, str]:
         """构造请求头"""
         user_agent = get_config("security.user_agent")
@@ -252,6 +275,7 @@ class ChatRequestBuilder:
 
         apply_statsig(headers)
         headers["Cookie"] = build_sso_cookie(token)
+        ChatRequestBuilder.ensure_latin1_headers(headers, token)
 
         return headers
 
@@ -379,7 +403,7 @@ class GrokChatService:
             except UpstreamException:
                 raise
             except Exception as e:
-                logger.error(f"Chat request error: {e}")
+                logger.error(f"Chat request error: {e}", exc_info=True)
                 await session.close()
                 raise UpstreamException(
                     message=f"Chat connection failed: {str(e)}",

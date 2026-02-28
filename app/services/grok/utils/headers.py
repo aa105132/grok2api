@@ -5,7 +5,7 @@ Common header helpers for Grok services.
 from __future__ import annotations
 
 import uuid
-from typing import Dict
+from typing import Dict, Optional
 
 from app.core.config import get_config
 from app.services.grok.utils.statsig import StatsigService
@@ -24,6 +24,14 @@ def build_sso_cookie(token: str, include_rw: bool = False) -> str:
     if cf:
         cookie = f"{cookie};cf_clearance={cf}"
     return cookie
+
+
+def find_non_latin1_char(value: str) -> Optional[tuple[int, str]]:
+    """返回首个无法用 latin-1 编码的字符位置和字符。"""
+    for idx, ch in enumerate(value):
+        if ord(ch) > 0xFF:
+            return idx, ch
+    return None
 
 
 def apply_statsig(headers: Dict[str, str]) -> None:

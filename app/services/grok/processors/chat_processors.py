@@ -149,7 +149,7 @@ class StreamProcessor(BaseProcessor):
                 {"index": 0, "delta": delta, "logprobs": None, "finish_reason": finish}
             ],
         }
-        return f"data: {orjson.dumps(chunk).decode()}\n\n"
+        return f"data: {orjson.dumps(chunk).decode("utf-8")}\n\n"
 
     def _yield_tool_call_delta_chunks(
         self, tool_calls: list[dict[str, Any]]
@@ -413,6 +413,7 @@ class StreamProcessor(BaseProcessor):
             logger.error(
                 f"Stream processing error: {e}",
                 extra={"model": self.model, "error_type": type(e).__name__},
+                exc_info=True,
             )
             raise
         finally:
@@ -571,6 +572,7 @@ class CollectProcessor(BaseProcessor):
             logger.error(
                 f"Collect processing error: {e}",
                 extra={"model": self.model, "error_type": type(e).__name__},
+                exc_info=True,
             )
         finally:
             await self.close()
