@@ -276,24 +276,24 @@ class StreamProcessor(BaseProcessor):
                     if self.show_think:
                         # 搜索内容
                         if query := tool_card.get("webSearch", {}).get("args", {}).get("query", None):
-                            yield self._sse(reasoning_content=f"{agent_name}: 正在搜索 {query} 中\n")
+                            yield self._sse(reasoning_content=f"{agent_name}: 正在搜索 `{query}` 中...\n")
                         
                         # 专家对话
                         if agent_talk := tool_card.get("chatroomSend", {}).get("args", {}).get("message", None):
-                            yield self._sse(reasoning_content=f"{agent_name}：{agent_talk}\n")
+                            yield self._sse(reasoning_content=f"{agent_name}: {agent_talk}\n")
                 
                 # 搜索结果
                 if search_results := resp.get("webSearchResults", None):
                     if self.show_think:
                         if results := search_results.get("results", []):
                             if results:
-                                yield self._sse(reasoning_content=f"{agent_name} 搜索结果：\n")
+                                yield self._sse(reasoning_content=f"{agent_name} 搜索结果: \n")
                             
                             for result in results:
                                 url = result.get("url", "")
                                 title = result.get("title", "")
                                 preview = result.get("preview", "")
-                                yield self._sse(reasoning_content=f"[{title}]({url})\n> {preview}\n")
+                                yield self._sse(reasoning_content=f"[{title}]({url})\n> {preview}\n\n")
                 
                 # modelResponse
                 if model_response := resp.get("modelResponse"):
@@ -307,13 +307,13 @@ class StreamProcessor(BaseProcessor):
                         if self.show_think:
                             if results := search_results.get("results", []):
                                 if results:
-                                    yield self._sse(reasoning_content="最终使用的搜索结果：\n")
+                                    yield self._sse(reasoning_content="最终使用的搜索结果: \n")
                                 
                                 for result in results:
                                     url = result.get("url", "")
                                     title = result.get("title", "")
                                     preview = result.get("preview", "")
-                                    yield self._sse(reasoning_content=f"[{title}]({url})\n> {preview}\n")
+                                    yield self._sse(reasoning_content=f"[{title}]({url})\n> {preview}\n\n")
 
                     # 处理生成的图片
                     for url in _collect_image_urls(model_response):
@@ -489,17 +489,17 @@ class CollectProcessor(BaseProcessor):
                 if tool_card := resp.get("toolUsageCard", None):
                     # 搜索内容
                     if query := tool_card.get("webSearch", {}).get("args", {}).get("query", None):
-                        reasoning_content += f"{agent_name}：搜索 {query}\n"
+                        reasoning_content += f"{agent_name}：正在搜索 `{query}` 中...\n"
                     
                     # 专家对话
                     if agent_talk := tool_card.get("chatroomSend", {}).get("args", {}).get("message", None):
-                        reasoning_content += f"{agent_name}：{agent_talk}\n"
+                        reasoning_content += f"{agent_name}: {agent_talk}\n"
                 
                 # 搜索结果
                 if search_results := resp.get("webSearchResults", None):
                     if results := search_results.get("results", []):
                         if results:
-                            reasoning_content += f"{agent_name} 搜索结果：\n"
+                            reasoning_content += f"{agent_name} 搜索结果: \n"
                         
                         for result in results:
                             url = result.get("url", "")
@@ -514,7 +514,7 @@ class CollectProcessor(BaseProcessor):
                     if search_results := model_response.get("webSearchResults", None):
                         if results := search_results.get("results", []):
                             if results:
-                                reasoning_content += "最终使用的搜索结果：\n"
+                                reasoning_content += "最终使用的搜索结果: \n"
                             
                             for result in results:
                                 url = result.get("url", "")
