@@ -304,15 +304,14 @@ class StreamProcessor(BaseProcessor):
                         # 处理搜索结果
                         if search_results := model_response.get("webSearchResults", None):
                             if self.show_think:
-                                if results := search_results.get("results", []):
-                                    if results:
-                                        yield self._sse(reasoning_content="最终使用的搜索结果: \n")
-                                    
-                                    for result in results:
-                                        url = result.get("url", "")
-                                        title = result.get("title", "")
-                                        preview = result.get("preview", "")
-                                        yield self._sse(reasoning_content=f"[{title}]({url})\n> {preview}\n\n")
+                                if results:
+                                    yield self._sse(reasoning_content="最终使用的搜索结果: \n")
+                                
+                                for result in results:
+                                    url = result.get("url", "")
+                                    title = result.get("title", "")
+                                    preview = result.get("preview", "")
+                                    yield self._sse(reasoning_content=f"[{title}]({url})\n> {preview}\n\n")
                         
                         self.think_opened = False
 
@@ -515,15 +514,13 @@ class CollectProcessor(BaseProcessor):
                     content = model_response.get("message", "")
 
                     if search_results := model_response.get("webSearchResults", None):
-                        if results := search_results.get("results", []):
-                            if results:
-                                reasoning_content += "最终使用的搜索结果: \n"
-                            
-                            for result in results:
-                                url = result.get("url", "")
-                                title = result.get("title", "")
-                                preview = result.get("preview", "")
-                                reasoning_content += f"[{title}]({url})\n> {preview}\n"
+                        reasoning_content += "最终使用的搜索结果: \n"
+                        
+                        for result in search_results:
+                            url = result.get("url", "")
+                            title = result.get("title", "")
+                            preview = result.get("preview", "")
+                            reasoning_content += f"[{title}]({url})\n> {preview}\n"
 
                     if urls := _collect_image_urls(model_response):
                         content += "\n"
