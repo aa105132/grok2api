@@ -313,6 +313,7 @@ class StreamProcessor(BaseProcessor):
                                         title = result.get("title", "")
                                         preview = result.get("preview", "")
                                         yield self._sse(reasoning_content=f"[{title}]({url})\n> {preview}\n\n")
+                        
                         self.think_opened = False
 
                     
