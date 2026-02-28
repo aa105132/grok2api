@@ -507,7 +507,7 @@ class CollectProcessor(BaseProcessor):
                             url = result.get("url", "")
                             title = result.get("title", "")
                             preview = result.get("preview", "")
-                            reasoning_content += f"[{title}]({url})\n> {preview}\n"
+                            reasoning_content += f"[{title}]({url})\n> {preview}\n\n"
 
                 if model_response := resp.get("modelResponse"):
                     response_id = model_response.get("responseId", "")
@@ -520,7 +520,7 @@ class CollectProcessor(BaseProcessor):
                             url = result.get("url", "")
                             title = result.get("title", "")
                             preview = result.get("preview", "")
-                            reasoning_content += f"[{title}]({url})\n> {preview}\n"
+                            reasoning_content += f"[{title}]({url})\n> {preview}\n\n"
 
                     if urls := _collect_image_urls(model_response):
                         content += "\n"
