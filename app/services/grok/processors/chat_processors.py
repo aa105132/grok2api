@@ -257,7 +257,7 @@ class StreamProcessor(BaseProcessor):
                     self.role_sent = True
 
                 # 图像生成进度
-                if img := resp.get("streamingImageGenerationResponse"):
+                if img := resp.get("streamingImageGenerationResponse", None):
                     if self.show_think:
                         if not self.think_opened:
                             self.think_opened = True
@@ -269,16 +269,54 @@ class StreamProcessor(BaseProcessor):
                             )
                         )
                     continue
-
+                
+                # 多专家深度思考
+                agent_name = resp.get("rolloutId", "AI")
+                if tool_card := resp.get("toolUsageCard", None):
+                    if self.show_think:
+                        # 搜索内容
+                        if query := tool_card.get("webSearch", {}).get("args", {}).get("query", None):
+                            yield self._sse(reasoning_content=f"{agent_name}: 正在搜索 {query} 中\n")
+                        
+                        # 专家对话
+                        if agent_talk := tool_card.get("chatroomSend", {}).get("args", {}).get("message", None):
+                            yield self._sse(reasoning_content=f"{agent_name}：{agent_talk}\n")
+                
+                # 搜索结果
+                if search_results := resp.get("webSearchResults", None):
+                    if self.show_think:
+                        if results := search_results.get("results", []):
+                            if results:
+                                yield self._sse(reasoning_content=f"{agent_name} 搜索结果：\n")
+                            
+                            for result in results:
+                                url = result.get("url", "")
+                                title = result.get("title", "")
+                                preview = result.get("preview", "")
+                                yield self._sse(reasoning_content=f"[{title}]({url})\n> {preview}\n")
+                
                 # modelResponse
-                if mr := resp.get("modelResponse"):
+                if model_response := resp.get("modelResponse"):
                     if self.think_opened and self.show_think:
-                        if msg := mr.get("message"):
+                        if msg := model_response.get("message"):
                             yield self._sse(reasoning_content=msg + "\n")
                         self.think_opened = False
 
+                    # 处理搜索结果
+                    if search_results := model_response.get("webSearchResults", None):
+                        if self.show_think:
+                            if results := search_results.get("results", []):
+                                if results:
+                                    yield self._sse(reasoning_content="最终使用的搜索结果：\n")
+                                
+                                for result in results:
+                                    url = result.get("url", "")
+                                    title = result.get("title", "")
+                                    preview = result.get("preview", "")
+                                    yield self._sse(reasoning_content=f"[{title}]({url})\n> {preview}\n")
+
                     # 处理生成的图片
-                    for url in _collect_image_urls(mr):
+                    for url in _collect_image_urls(model_response):
                         parts = url.split("/")
                         img_id = parts[-2] if len(parts) >= 2 else "image"
 
@@ -304,7 +342,7 @@ class StreamProcessor(BaseProcessor):
                             yield self._sse(f"![{img_id}]({final_url})\n")
 
                     if (
-                        (meta := mr.get("metadata", {}))
+                        (meta := model_response.get("metadata", {}))
                         .get("llm_info", {})
                         .get("modelHash")
                     ):
@@ -423,6 +461,7 @@ class CollectProcessor(BaseProcessor):
         content = ""
         token_buffer = ""
         idle_timeout = get_config("timeout.stream_idle_timeout")
+        reasoning_content = ""
 
         try:
             async for line in _with_idle_timeout(response, idle_timeout, self.model):
@@ -444,12 +483,46 @@ class CollectProcessor(BaseProcessor):
 
                 if (token := resp.get("token")) is not None and token:
                     token_buffer += token
+                
+                # 多专家深度思考
+                agent_name = resp.get("rolloutId", "AI")
+                if tool_card := resp.get("toolUsageCard", None):
+                    # 搜索内容
+                    if query := tool_card.get("webSearch", {}).get("args", {}).get("query", None):
+                        reasoning_content += f"{agent_name}：搜索 {query}\n"
+                    
+                    # 专家对话
+                    if agent_talk := tool_card.get("chatroomSend", {}).get("args", {}).get("message", None):
+                        reasoning_content += f"{agent_name}：{agent_talk}\n"
+                
+                # 搜索结果
+                if search_results := resp.get("webSearchResults", None):
+                    if results := search_results.get("results", []):
+                        if results:
+                            reasoning_content += f"{agent_name} 搜索结果：\n"
+                        
+                        for result in results:
+                            url = result.get("url", "")
+                            title = result.get("title", "")
+                            preview = result.get("preview", "")
+                            reasoning_content += f"[{title}]({url})\n> {preview}\n"
 
-                if mr := resp.get("modelResponse"):
-                    response_id = mr.get("responseId", "")
-                    content = mr.get("message", "")
+                if model_response := resp.get("modelResponse"):
+                    response_id = model_response.get("responseId", "")
+                    content = model_response.get("message", "")
 
-                    if urls := _collect_image_urls(mr):
+                    if search_results := model_response.get("webSearchResults", None):
+                        if results := search_results.get("results", []):
+                            if results:
+                                reasoning_content += "最终使用的搜索结果：\n"
+                            
+                            for result in results:
+                                url = result.get("url", "")
+                                title = result.get("title", "")
+                                preview = result.get("preview", "")
+                                reasoning_content += f"[{title}]({url})\n> {preview}\n"
+
+                    if urls := _collect_image_urls(model_response):
                         content += "\n"
                         for url in urls:
                             parts = url.split("/")
@@ -477,7 +550,7 @@ class CollectProcessor(BaseProcessor):
                                 content += f"![{img_id}]({final_url})\n"
 
                     if (
-                        (meta := mr.get("metadata", {}))
+                        (meta := model_response.get("metadata", {}))
                         .get("llm_info", {})
                         .get("modelHash")
                     ):
@@ -549,6 +622,8 @@ class CollectProcessor(BaseProcessor):
             message["content"] = ""
             message["tool_calls"] = tool_calls
             finish_reason = "tool_calls"
+        if reasoning_content and get_config("chat.thinking"):
+            message["reasoning_content"] = reasoning_content
 
         return {
             "id": response_id,
