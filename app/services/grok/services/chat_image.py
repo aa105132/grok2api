@@ -233,6 +233,8 @@ class ImageChatService:
         if b64 := data.get("base64"):
             img_id = str(uuid.uuid4())[:8]
             content += f"![{img_id}](data:image/jpeg;base64,{b64})\n"
+        if not content and "error" in data:
+            content += f"Error: {data['error']}\n"
         return content
 
     @staticmethod
@@ -549,7 +551,7 @@ class ImageChatService:
         logger.debug(f"Processing image edit collect response: model={model}")
         processor = ImageCollectProcessor(model, token, response_format=image_format)
         image_results = await processor.process(response)
-
+        
         content = ""
         for img_data in image_results:
             img_id = str(uuid.uuid4())[:8]
@@ -557,28 +559,51 @@ class ImageChatService:
                 content += f"![{img_id}]({img_data})\n"
             else:
                 content += f"![{img_id}](data:image/jpeg;base64,{img_data})\n"
-
-        result = {
-            "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",
-            "object": "chat.completion",
-            "created": int(time.time()),
-            "model": model,
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": content.strip(),
-                    },
-                    "finish_reason": "stop",
-                }
-            ],
-            "usage": {
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "total_tokens": 0,
-            },
-        }
+        
+        if content:
+            result = {
+                "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": content.strip(),
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                },
+            }
+        else:
+            result = {
+                "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "图片生成失败，可能是被审查拦截了",
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                },
+            }
 
         try:
             effort = EffortType.HIGH

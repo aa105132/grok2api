@@ -88,8 +88,8 @@ class ImageStreamProcessor(BaseProcessor):
                     continue
 
                 # modelResponse
-                if mr := resp.get("modelResponse"):
-                    if urls := _collect_image_urls(mr):
+                if model_response := resp.get("modelResponse"):
+                    if urls := _collect_image_urls(model_response):
                         for url in urls:
                             if self.response_format == "url":
                                 processed = await self.process_url(url, "image")
@@ -141,6 +141,15 @@ class ImageStreamProcessor(BaseProcessor):
                                 "image_tokens": 0,
                             },
                         },
+                    },
+                )
+            
+            if not final_images:
+                yield self._sse(
+                    "image_generation.completed",
+                    {
+                        "type": "image_generation.completed",
+                        "error": "图片生成失败，可能是被审查拦截了",
                     },
                 )
         except asyncio.CancelledError:
@@ -206,8 +215,8 @@ class ImageCollectProcessor(BaseProcessor):
                 if resp:
                     responses.append(resp)
 
-                if mr := resp.get("modelResponse"):
-                    if urls := _collect_image_urls(mr):
+                if model_response := resp.get("modelResponse"):
+                    if urls := _collect_image_urls(model_response):
                         for url in urls:
                             if self.response_format == "url":
                                 processed = await self.process_url(url, "image")
