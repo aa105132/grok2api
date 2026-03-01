@@ -51,8 +51,9 @@ class MessageExtractor:
         urls = re.findall(r"(https?://[^\s]+\.(?:jpg|png|webp))", message)
         if urls:
             for url in urls:
-                results.append(url)
-                message = message.replace(url, "")
+                if url.startswith(get_config("app.app_url")):
+                    results.append(url)
+                    message = message.replace(url, "")
         
         # Base64形式
         base64_urls = re.findall(r"(data:image/[^;]+;base64,[a-zA-Z0-9+/=\s]+)", message)
