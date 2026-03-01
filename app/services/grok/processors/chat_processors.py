@@ -149,7 +149,7 @@ class StreamProcessor(BaseProcessor):
                 {"index": 0, "delta": delta, "logprobs": None, "finish_reason": finish}
             ],
         }
-        return f"data: {orjson.dumps(chunk).decode("utf-8")}\n\n"
+        return f"data: {orjson.dumps(chunk).decode('utf-8')}\n\n"
 
     def _yield_tool_call_delta_chunks(
         self, tool_calls: list[dict[str, Any]]
