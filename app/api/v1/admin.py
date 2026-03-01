@@ -777,11 +777,7 @@ async def update_tokens_api(data: dict):
     storage = get_storage()
     try:
         from app.services.token.manager import get_token_manager
-        from app.services.token.models import (
-            TokenInfo,
-            normalize_token_value,
-            is_token_cookie_safe,
-        )
+        from app.services.token.models import TokenInfo
 
         async with storage.acquire_lock("tokens_save", timeout=10):
             existing = await storage.load_tokens() or {}
@@ -800,15 +796,11 @@ async def update_tokens_api(data: dict):
                     else:
                         continue
                     raw_token = token_data.get("token")
-                    if isinstance(raw_token, str):
-                        normalized_token = normalize_token_value(raw_token)
-                        if normalized_token and is_token_cookie_safe(normalized_token):
-                            token_data["token"] = normalized_token
-                            pool_map[normalized_token] = token_data
-                        else:
-                            logger.warning(
-                                f"Skip invalid existing token in pool '{pool_name}': {str(raw_token)[:16]}..."
-                            )
+                    if isinstance(raw_token, str) and raw_token.startswith("sso="):
+                        token_data["token"] = raw_token[4:]
+                    token_key = token_data.get("token")
+                    if isinstance(token_key, str):
+                        pool_map[token_key] = token_data
                 existing_map[pool_name] = pool_map
             for pool_name, tokens in (data or {}).items():
                 if not isinstance(tokens, list):
@@ -823,16 +815,8 @@ async def update_tokens_api(data: dict):
                         continue
 
                     raw_token = token_data.get("token")
-                    if isinstance(raw_token, str):
-                        normalized_token = normalize_token_value(raw_token)
-                        if not normalized_token or not is_token_cookie_safe(normalized_token):
-                            logger.warning(
-                                f"Skip invalid input token in pool '{pool_name}': {str(raw_token)[:16]}..."
-                            )
-                            continue
-                        token_data["token"] = normalized_token
-                    else:
-                        continue
+                    if isinstance(raw_token, str) and raw_token.startswith("sso="):
+                        token_data["token"] = raw_token[4:]
 
                     base = existing_map.get(pool_name, {}).get(
                         token_data.get("token"), {}

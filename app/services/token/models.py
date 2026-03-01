@@ -10,7 +10,7 @@ Token 数据模型
 
 from enum import Enum
 from typing import Optional, List
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 from datetime import datetime
 
 
@@ -44,42 +44,12 @@ EFFORT_COST = {
 }
 
 
-def normalize_token_value(token: str) -> str:
-    """规范化 token 字符串（去空白、去 sso= 前缀）"""
-    value = (token or "").strip()
-    return value[4:] if value.startswith("sso=") else value
-
-
-def is_token_cookie_safe(token: str) -> bool:
-    """检查 token 是否可安全用于 Cookie（ASCII 可打印且不含分隔符）"""
-    value = normalize_token_value(token)
-    if not value:
-        return False
-    for ch in value:
-        code = ord(ch)
-        if code < 0x21 or code > 0x7E:
-            return False
-        if ch in {'"', ",", ";", "\\"}:
-            return False
-    return True
-
-
 class TokenInfo(BaseModel):
     """Token 信息"""
 
     token: str
     status: TokenStatus = TokenStatus.ACTIVE
     quota: int = BASIC__DEFAULT_QUOTA
-
-    @field_validator("token", mode="before")
-    @classmethod
-    def _validate_token(cls, v):
-        token = normalize_token_value(str(v or ""))
-        if not token:
-            raise ValueError("token is empty")
-        if not is_token_cookie_safe(token):
-            raise ValueError("token contains illegal characters for Cookie header")
-        return token
 
     # 统计
     created_at: int = Field(

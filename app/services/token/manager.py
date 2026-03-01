@@ -13,8 +13,6 @@ from app.services.token.models import (
     TokenStatus,
     BASIC__DEFAULT_QUOTA,
     SUPER_DEFAULT_QUOTA,
-    normalize_token_value,
-    is_token_cookie_safe,
 )
 from app.core.storage import get_storage
 from app.core.config import get_config
@@ -488,15 +486,7 @@ class TokenManager:
 
         pool = self.pools[pool_name]
 
-        token = normalize_token_value(token)
-        if not token:
-            logger.warning(f"Pool '{pool_name}': empty token rejected")
-            return False
-        if not is_token_cookie_safe(token):
-            logger.warning(
-                f"Pool '{pool_name}': invalid token characters rejected ({token[:10]}...)"
-            )
-            return False
+        token = token[4:] if token.startswith("sso=") else token
         if pool.get(token):
             logger.warning(f"Pool '{pool_name}': token already exists")
             return False

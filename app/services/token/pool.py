@@ -3,12 +3,7 @@
 import random
 from typing import Dict, List, Optional, Iterator
 
-from app.services.token.models import (
-    TokenInfo,
-    TokenStatus,
-    TokenPoolStats,
-    is_token_cookie_safe,
-)
+from app.services.token.models import TokenInfo, TokenStatus, TokenPoolStats
 
 
 class TokenPool:
@@ -45,9 +40,7 @@ class TokenPool:
         available = [
             t
             for t in self._tokens.values()
-            if t.status == TokenStatus.ACTIVE
-            and t.quota > 0
-            and is_token_cookie_safe(t.token)
+            if t.status == TokenStatus.ACTIVE and t.quota > 0
             and (not exclude or t.token not in exclude)
         ]
 
