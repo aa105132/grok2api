@@ -346,7 +346,8 @@ class VideoService:
         if attachments:
             upload_service = UploadService()
             try:
-                for attach_type, attach_data in attachments:
+                # 因为只能提供一张图片，所以优先选择末尾的图片附件
+                for attach_type, attach_data in reversed(attachments):
                     if attach_type == "image":
                         _, file_uri = await upload_service.upload(attach_data, token)
                         image_url = f"https://assets.grok.com/{file_uri}"

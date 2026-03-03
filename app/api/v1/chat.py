@@ -2,7 +2,7 @@
 Chat Completions API 路由
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -20,6 +20,66 @@ VALID_ROLES = ["developer", "system", "user", "assistant", "tool"]
 # 角色别名映射 (OpenAI 兼容: function -> tool)
 ROLE_ALIASES = {"function": "tool"}
 USER_CONTENT_TYPES = ["text", "image_url", "input_audio", "file"]
+VALID_TOOL_TYPES = ["function"]
+VALID_TOOL_CHOICE_LITERALS = ["auto", "none", "required"]
+
+
+class ToolFunctionDef(BaseModel):
+    """工具函数定义"""
+
+    name: str = Field(..., description="函数名")
+    description: Optional[str] = Field(None, description="函数描述")
+    parameters: Optional[Dict[str, Any]] = Field(None, description="JSON Schema 参数")
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str):
+        if not isinstance(v, str) or not v.strip():
+            raise ValueError("function.name is required")
+        return v.strip()
+
+    model_config = {"extra": "allow"}
+
+
+class ToolDef(BaseModel):
+    """工具定义"""
+
+    type: str = Field("function", description="工具类型，固定 function")
+    function: ToolFunctionDef = Field(..., description="工具函数定义")
+
+    @field_validator("type")
+    @classmethod
+    def validate_type(cls, v: str):
+        if v != "function":
+            raise ValueError("tools[].type must be 'function'")
+        return v
+
+
+class ToolChoiceFunction(BaseModel):
+    """tool_choice.function"""
+
+    name: str = Field(..., description="指定调用的函数名")
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str):
+        if not isinstance(v, str) or not v.strip():
+            raise ValueError("tool_choice.function.name is required")
+        return v.strip()
+
+
+class ToolChoiceObject(BaseModel):
+    """tool_choice 对象形式"""
+
+    type: str = Field("function", description="固定 function")
+    function: ToolChoiceFunction = Field(..., description="指定函数")
+
+    @field_validator("type")
+    @classmethod
+    def validate_type(cls, v: str):
+        if v != "function":
+            raise ValueError("tool_choice.type must be 'function'")
+        return v
 
 
 class MessageItem(BaseModel):
@@ -113,6 +173,12 @@ class ChatCompletionRequest(BaseModel):
     thinking: Optional[str] = Field(None, description="思考模式: enabled/disabled/None")
     n: Optional[int] = Field(1, description="生成数量", le=5)
 
+    # 工具调用模拟参数
+    tools: Optional[List[ToolDef]] = Field(None, description="工具定义")
+    tool_choice: Optional[Union[Literal["auto", "none", "required"], ToolChoiceObject]] = Field(
+        None, description="工具调用策略"
+    )
+
     # 视频生成配置
     video_config: Optional[VideoConfig] = Field(None, description="视频生成参数")
 
@@ -151,9 +217,56 @@ def validate_request(request: ChatCompletionRequest):
             code="model_not_found",
         )
 
+    # tools/tool_choice 一致性校验
+    tools = request.tools or []
+    for tool_idx, tool in enumerate(tools):
+        if tool.type != "function":
+            raise ValidationException(
+                message="tools[].type must be 'function'",
+                param=f"tools.{tool_idx}.type",
+                code="invalid_tools_schema",
+            )
+        if not tool.function.name:
+            raise ValidationException(
+                message="tools[].function.name is required",
+                param=f"tools.{tool_idx}.function.name",
+                code="invalid_tools_schema",
+            )
+
+    tool_names = {tool.function.name for tool in tools}
+
+    if request.tool_choice == "required" and not tools:
+        raise ValidationException(
+            message="tool_choice=required requires non-empty tools",
+            param="tool_choice",
+            code="invalid_tool_choice",
+        )
+
+    if isinstance(request.tool_choice, ToolChoiceObject):
+        chosen_name = request.tool_choice.function.name
+        if not tools:
+            raise ValidationException(
+                message="tool_choice function requires non-empty tools",
+                param="tool_choice.function.name",
+                code="invalid_tool_choice",
+            )
+        if chosen_name not in tool_names:
+            raise ValidationException(
+                message=f"tool_choice function `{chosen_name}` not found in tools",
+                param="tool_choice.function.name",
+                code="invalid_tool_choice",
+            )
+
     # 验证消息
     for idx, msg in enumerate(request.messages):
         content = msg.content
+
+        if msg.role == "tool" and (not msg.tool_call_id or not msg.tool_call_id.strip()):
+            raise ValidationException(
+                message="tool role message requires tool_call_id",
+                param=f"messages.{idx}.tool_call_id",
+                code="missing_tool_call_id",
+            )
 
         # 字符串内容
         if isinstance(content, str):
@@ -258,7 +371,9 @@ async def chat_completions(request: ChatCompletionRequest):
 
     logger.debug(f"Chat request: model={request.model}, stream={request.stream}")
 
-    # 检测视频模型
+    payload_messages = [msg.model_dump() for msg in request.messages]
+
+    # 按模型类型路由到独立服务
     model_info = ModelService.get(request.model)
     if model_info and model_info.is_video:
         from app.services.grok.services.media import VideoService
@@ -268,7 +383,7 @@ async def chat_completions(request: ChatCompletionRequest):
 
         result = await VideoService.completions(
             model=request.model,
-            messages=[msg.model_dump() for msg in request.messages],
+            messages=payload_messages,
             stream=request.stream,
             thinking=request.thinking,
             aspect_ratio=v_conf.aspect_ratio,
@@ -276,13 +391,29 @@ async def chat_completions(request: ChatCompletionRequest):
             resolution=v_conf.resolution_name,
             preset=v_conf.preset,
         )
-    else:
-        result = await ChatService.completions(
+    elif model_info and model_info.is_image:
+        from app.services.grok.services.chat_image import ImageChatService
+
+        result = await ImageChatService.completions(
             model=request.model,
-            messages=[msg.model_dump() for msg in request.messages],
+            messages=payload_messages,
             stream=request.stream,
             thinking=request.thinking,
             n=request.n or 1,
+        )
+    else:
+        result = await ChatService.completions(
+            model=request.model,
+            messages=payload_messages,
+            stream=request.stream,
+            thinking=request.thinking,
+            n=request.n or 1,
+            tools=[tool.model_dump() for tool in (request.tools or [])],
+            tool_choice=(
+                request.tool_choice.model_dump()
+                if isinstance(request.tool_choice, ToolChoiceObject)
+                else request.tool_choice
+            ),
         )
 
     if isinstance(result, dict):

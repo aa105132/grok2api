@@ -26,14 +26,25 @@ def _extract_text_from_sse(chunks: list[str]) -> str:
     return "".join(parts)
 
 
-async def _run_stream_processor(responses: list[dict], think: bool) -> str:
+async def _run_stream_processor(
+    responses: list[dict],
+    think: bool,
+    tools: list[dict] | None = None,
+    tool_choice: str | dict | None = None,
+) -> str:
     await config.load()
 
     async def _response_iter():
         for item in responses:
             yield _build_response_line(item)
 
-    processor = StreamProcessor("grok-4-1-thinking-1129", "token", think=think)
+    processor = StreamProcessor(
+        "grok-4-1-thinking-1129",
+        "token",
+        think=think,
+        tools=tools,
+        tool_choice=tool_choice,
+    )
     chunks: list[str] = []
     async for chunk in processor.process(_response_iter()):
         chunks.append(chunk)
@@ -127,3 +138,34 @@ def test_stream_processor_appends_model_response_suffix_when_token_partial():
     text = asyncio.run(_run_stream_processor(responses, think=True))
 
     assert text.endswith("你好，世界")
+
+
+def test_stream_processor_deduplicates_trailing_aggregated_model_response():
+    responses = [
+        {"responseId": "resp-7", "token": "Test received! "},
+        {
+            "token": "🚀 All systems nominal, Grok here and ready to rock. What's up?"
+        },
+        {
+            "modelResponse": {
+                "responseId": "resp-7",
+                "message": "🚀 \n\nAll systems nominal, Grok here and ready to rock. What's up?",
+            }
+        },
+    ]
+
+    text = asyncio.run(
+        _run_stream_processor(
+            responses,
+            think=True,
+            tools=[
+                {
+                    "type": "function",
+                    "function": {"name": "web_search", "description": "mock"},
+                }
+            ],
+            tool_choice="auto",
+        )
+    )
+
+    assert text == "Test received! 🚀 All systems nominal, Grok here and ready to rock. What's up?"

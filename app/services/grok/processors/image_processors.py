@@ -10,15 +10,15 @@ import orjson
 from curl_cffi.requests.errors import RequestsError
 
 from app.core.config import get_config
-from app.core.logger import logger
 from app.core.exceptions import UpstreamException
+from app.core.logger import logger
 from .base import (
     BaseProcessor,
     StreamIdleTimeoutError,
-    _with_idle_timeout,
-    _normalize_stream_line,
     _collect_image_urls,
     _is_http2_stream_error,
+    _normalize_stream_line,
+    _with_idle_timeout,
 )
 
 
@@ -50,6 +50,7 @@ class ImageStreamProcessor(BaseProcessor):
         """处理流式响应"""
         final_images = []
         idle_timeout = get_config("timeout.stream_idle_timeout")
+        responses = []
 
         try:
             async for line in _with_idle_timeout(response, idle_timeout, self.model):
@@ -62,6 +63,8 @@ class ImageStreamProcessor(BaseProcessor):
                     continue
 
                 resp = data.get("result", {}).get("response", {})
+                if resp:
+                    responses.append(resp)
 
                 # 图片生成进度
                 if img := resp.get("streamingImageGenerationResponse"):
@@ -85,8 +88,8 @@ class ImageStreamProcessor(BaseProcessor):
                     continue
 
                 # modelResponse
-                if mr := resp.get("modelResponse"):
-                    if urls := _collect_image_urls(mr):
+                if model_response := resp.get("modelResponse"):
+                    if urls := _collect_image_urls(model_response):
                         for url in urls:
                             if self.response_format == "url":
                                 processed = await self.process_url(url, "image")
@@ -113,6 +116,8 @@ class ImageStreamProcessor(BaseProcessor):
                                     final_images.append(processed)
                     continue
 
+            logger.info(f"Final images: {len(final_images)}")
+
             for index, b64 in enumerate(final_images):
                 if self.n == 1:
                     if index != self.target_index:
@@ -136,6 +141,15 @@ class ImageStreamProcessor(BaseProcessor):
                                 "image_tokens": 0,
                             },
                         },
+                    },
+                )
+
+            if not final_images:
+                yield self._sse(
+                    "image_generation.completed",
+                    {
+                        "type": "image_generation.completed",
+                        "error": "图片生成失败，可能是被审查拦截了",
                     },
                 )
         except asyncio.CancelledError:
@@ -185,6 +199,7 @@ class ImageCollectProcessor(BaseProcessor):
         """处理并收集图片"""
         images = []
         idle_timeout = get_config("timeout.stream_idle_timeout")
+        responses = []
 
         try:
             async for line in _with_idle_timeout(response, idle_timeout, self.model):
@@ -193,18 +208,15 @@ class ImageCollectProcessor(BaseProcessor):
                     continue
                 try:
                     data = orjson.loads(line)
-                    # Log raw response structure for debugging
-                    if "result" in data and "response" in data.get("result", {}):
-                        resp_keys = list(data.get("result", {}).get("response", {}).keys())
-                        logger.debug(f"ImageCollectProcessor response keys: {resp_keys}")
                 except orjson.JSONDecodeError:
                     continue
 
                 resp = data.get("result", {}).get("response", {})
+                if resp:
+                    responses.append(resp)
 
-                if mr := resp.get("modelResponse"):
-                    if urls := _collect_image_urls(mr):
-                        logger.info(f"ImageCollectProcessor: extracted {len(urls)} URLs from modelResponse: {urls}")
+                if model_response := resp.get("modelResponse"):
+                    if urls := _collect_image_urls(model_response):
                         for url in urls:
                             if self.response_format == "url":
                                 processed = await self.process_url(url, "image")
@@ -247,6 +259,7 @@ class ImageCollectProcessor(BaseProcessor):
         finally:
             await self.close()
 
+        logger.info(f"Final images: {len(images)}")
         return images
 
 

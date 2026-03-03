@@ -13,6 +13,7 @@ from curl_cffi.requests.errors import RequestsError
 from app.core.config import get_config
 from app.core.logger import logger
 from app.core.exceptions import UpstreamException
+from app.services.grok.tool_calls import ToolCallPlanner
 from .base import (
     BaseProcessor,
     StreamIdleTimeoutError,
@@ -97,7 +98,14 @@ def extract_tool_text(raw: str, rollout_id: str = "") -> str:
 class StreamProcessor(BaseProcessor):
     """流式响应处理器"""
 
-    def __init__(self, model: str, token: str = "", think: bool = None):
+    def __init__(
+        self,
+        model: str,
+        token: str = "",
+        think: bool = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any = None,
+    ):
         super().__init__(model, token)
         self.response_id: str = None
         self.fingerprint: str = ""
@@ -111,6 +119,26 @@ class StreamProcessor(BaseProcessor):
         self.image_format = get_config("app.image_format")
         self._tag_buffer: str = ""
         self._in_filter_tag: bool = False
+        self.tools = tools or []
+        self.tool_choice = tool_choice
+        self.tool_call_simulation_enabled = bool(
+            get_config("chat.tool_call_simulation_enabled", True)
+        )
+        self.tool_call_prefix = get_config("chat.tool_call_prefix", "<|tool_call|>")
+        self.tool_call_strict = bool(get_config("chat.tool_call_strict", True))
+        self._tool_planner = ToolCallPlanner(
+            prefix=self.tool_call_prefix,
+            strict=self.tool_call_strict,
+        )
+        self._tool_branch_enabled = (
+            self.tool_call_simulation_enabled
+            and bool(self.tools)
+            and self.tool_choice != "none"
+        )
+        self._tool_mode_determined = not self._tool_branch_enabled
+        self._tool_mode_enabled = False
+        self._tool_gate_buffer = ""
+        self._tool_raw_buffer = ""
 
         # 工具调用卡片提取相关
         self.tool_usage_enabled: bool = "xai:tool_usage_card" in (self.filter_tags or [])
@@ -238,14 +266,25 @@ class StreamProcessor(BaseProcessor):
 
         return "".join(result)
 
-    def _sse(self, content: str = "", role: str = None, finish: str = None) -> str:
+    def _sse(
+        self,
+        content: str = "",
+        role: str = None,
+        finish: str = None,
+        reasoning_content: str = None,
+        tool_calls: list[dict[str, Any]] | None = None,
+    ) -> str:
         """构建 SSE 响应"""
-        delta = {}
+        delta: dict[str, Any] = {}
         if role:
             delta["role"] = role
             delta["content"] = ""
+        if reasoning_content is not None:
+            delta["reasoning_content"] = reasoning_content
         elif content:
             delta["content"] = content
+        if tool_calls is not None:
+            delta["tool_calls"] = tool_calls
 
         chunk = {
             "id": self.response_id or f"chatcmpl-{uuid.uuid4().hex[:24]}",
@@ -258,6 +297,113 @@ class StreamProcessor(BaseProcessor):
             ],
         }
         return f"data: {orjson.dumps(chunk).decode()}\n\n"
+
+    def _yield_tool_call_delta_chunks(
+        self, tool_calls: list[dict[str, Any]]
+    ) -> list[str]:
+        chunks: list[str] = []
+        for idx, call in enumerate(tool_calls):
+            call_id = str(call.get("id", ""))
+            fn = call.get("function", {}) if isinstance(call.get("function"), dict) else {}
+            fn_name = str(fn.get("name", ""))
+            fn_args = str(fn.get("arguments", ""))
+
+            chunks.append(
+                self._sse(
+                    tool_calls=[
+                        {
+                            "index": idx,
+                            "id": call_id,
+                            "type": "function",
+                            "function": {"name": fn_name, "arguments": ""},
+                        }
+                    ]
+                )
+            )
+
+            if fn_args:
+                step = 64
+                for i in range(0, len(fn_args), step):
+                    part = fn_args[i : i + step]
+                    chunks.append(
+                        self._sse(
+                            tool_calls=[
+                                {
+                                    "index": idx,
+                                    "function": {"arguments": part},
+                                }
+                            ]
+                        )
+                    )
+
+        chunks.append(self._sse(finish="tool_calls"))
+        chunks.append("data: [DONE]\n\n")
+        return chunks
+
+    @staticmethod
+    def _should_track_answer_chunk(content: str) -> bool:
+        text = (content or "").strip()
+        if not text:
+            return False
+        return (
+            re.match(
+                r"^(?:\[[^\]]+\])?\[(WebSearch|SearchImage|AgentThink)\]",
+                text,
+            )
+            is None
+        )
+
+    def _track_answer_chunk(self, content: str, in_think: bool) -> None:
+        if in_think:
+            return
+        if self._should_track_answer_chunk(content):
+            self.answer_text += content
+
+    @staticmethod
+    def _compact_text(text: str) -> str:
+        return re.sub(r"\s+", "", text or "")
+
+    def _model_response_delta(self, final_text: str) -> str:
+        """计算 modelResponse 相对已输出文本的增量，避免尾包聚合重复。"""
+        final_clean = str(final_text or "").strip()
+        if not final_clean:
+            return ""
+
+        emitted = self.answer_text.strip()
+        if not emitted:
+            return final_clean
+
+        if final_clean == emitted:
+            return ""
+        if final_clean.startswith(emitted):
+            return final_clean[len(emitted) :]
+        if emitted.endswith(final_clean) or final_clean in emitted:
+            return ""
+
+        compact_final = self._compact_text(final_clean)
+        compact_emitted = self._compact_text(emitted)
+        if compact_final and compact_final in compact_emitted:
+            return ""
+
+        max_overlap = min(len(emitted), len(final_clean))
+        for size in range(max_overlap, 0, -1):
+            if emitted[-size:] == final_clean[:size]:
+                return final_clean[size:]
+
+        if len(final_clean) <= len(emitted):
+            return ""
+
+        prefix_len = 0
+        max_len = min(len(final_clean), len(emitted))
+        while (
+            prefix_len < max_len
+            and final_clean[prefix_len] == emitted[prefix_len]
+        ):
+            prefix_len += 1
+        if prefix_len > 0:
+            return final_clean[prefix_len:]
+
+        return final_clean
 
     def _resolve_thinking_state(self, resp: dict[str, Any]) -> bool:
         """统一解析 thinking 状态，兼容 isThinking / reasoningStatus。"""
@@ -287,9 +433,7 @@ class StreamProcessor(BaseProcessor):
         idle_timeout = get_config("timeout.stream_idle_timeout")
 
         try:
-            async for line in _with_idle_timeout(
-                response, idle_timeout, self.model
-            ):
+            async for line in _with_idle_timeout(response, idle_timeout, self.model):
                 line = _normalize_stream_line(line)
                 if not line:
                     continue
@@ -307,6 +451,43 @@ class StreamProcessor(BaseProcessor):
                     self.response_id = rid
                 if rid := resp.get("rolloutId"):
                     self.rollout_id = str(rid)
+
+                token = resp.get("token")
+                if token is None:
+                    token = ""
+
+                if self._tool_branch_enabled and not self._tool_mode_determined and token:
+                    self._tool_gate_buffer += token
+                    gate_trimmed = self._tool_gate_buffer.lstrip()
+
+                    # 命中前缀：进入 tool 分支
+                    if gate_trimmed.startswith(self.tool_call_prefix):
+                        self._tool_mode_enabled = True
+                        self._tool_mode_determined = True
+                        self._tool_raw_buffer = self._tool_gate_buffer
+                        continue
+
+                    # 仍可能是前缀的部分片段：继续等待
+                    if self.tool_call_prefix.startswith(gate_trimmed):
+                        continue
+
+                    # 明确不是前缀：回落到普通文本，并先冲刷缓冲
+                    self._tool_mode_enabled = False
+                    self._tool_mode_determined = True
+                    if not self.role_sent:
+                        yield self._sse(role="assistant")
+                        self.role_sent = True
+                    buffered = self._filter_token(self._tool_gate_buffer)
+                    if buffered:
+                        yield self._sse(buffered)
+                        self._track_answer_chunk(buffered, in_think=False)
+                    self._tool_gate_buffer = ""
+                    continue
+
+                if self._tool_branch_enabled and self._tool_mode_enabled:
+                    if token:
+                        self._tool_raw_buffer += token
+                    continue
 
                 if not self.role_sent:
                     yield self._sse(role="assistant")
@@ -327,44 +508,60 @@ class StreamProcessor(BaseProcessor):
                     )
                     continue
 
+                # 多专家深度思考
+                agent_name = resp.get("rolloutId", "AI")
+                if tool_card := resp.get("toolUsageCard"):
+                    if self.show_think:
+                        if query := (
+                            tool_card.get("webSearch", {})
+                            .get("args", {})
+                            .get("query")
+                        ):
+                            yield self._sse(
+                                reasoning_content=f"{agent_name}: 正在搜索 `{query}` 中...\n"
+                            )
+                        if agent_talk := (
+                            tool_card.get("chatroomSend", {})
+                            .get("args", {})
+                            .get("message")
+                        ):
+                            yield self._sse(
+                                reasoning_content=f"{agent_name}: {agent_talk}\n"
+                            )
+
+                # 搜索结果
+                if search_results := resp.get("webSearchResults"):
+                    if self.show_think:
+                        if results := search_results.get("results", []):
+                            if results:
+                                yield self._sse(
+                                    reasoning_content=f"{agent_name} 搜索结果:\n"
+                                )
+                            for result in results:
+                                url = result.get("url", "")
+                                title = result.get("title", "")
+                                preview = result.get("preview", "")
+                                yield self._sse(
+                                    reasoning_content=f"[{title}]({url})\n> {preview}\n\n"
+                                )
+
                 # modelResponse
-                if mr := resp.get("modelResponse"):
+                if model_response := resp.get("modelResponse"):
                     if self.image_think_active:
                         self.image_think_active = False
                     if self.think_opened:
                         yield self._sse("\n</think>\n")
                         self.think_opened = False
 
-                    msg = mr.get("message")
+                    msg = model_response.get("message")
                     if isinstance(msg, str):
-                        final_text = msg.strip()
-                        if final_text:
-                            emitted = self.answer_text.strip()
-                            if not emitted:
-                                yield self._sse(final_text)
-                                self.answer_text = final_text
-                            elif final_text != emitted:
-                                # 优先补齐“已输出前缀 -> 最终完整答案”的差量，避免重复。
-                                if final_text.startswith(emitted):
-                                    suffix = final_text[len(emitted):]
-                                    if suffix:
-                                        yield self._sse(suffix)
-                                        self.answer_text += suffix
-                                elif len(final_text) > len(emitted):
-                                    prefix_len = 0
-                                    max_len = min(len(final_text), len(emitted))
-                                    while (
-                                        prefix_len < max_len
-                                        and final_text[prefix_len] == emitted[prefix_len]
-                                    ):
-                                        prefix_len += 1
-                                    suffix = final_text[prefix_len:]
-                                    if suffix:
-                                        yield self._sse(suffix)
-                                        self.answer_text += suffix
+                        delta_text = self._model_response_delta(msg)
+                        if delta_text:
+                            yield self._sse(delta_text)
+                            self._track_answer_chunk(delta_text, in_think=False)
 
                     # 处理生成的图片
-                    for url in _collect_image_urls(mr):
+                    for url in _collect_image_urls(model_response):
                         parts = url.split("/")
                         img_id = parts[-2] if len(parts) >= 2 else "image"
 
@@ -390,7 +587,7 @@ class StreamProcessor(BaseProcessor):
                             yield self._sse(f"![{img_id}]({final_url})\n")
 
                     if (
-                        (meta := mr.get("metadata", {}))
+                        (meta := model_response.get("metadata", {}))
                         .get("llm_info", {})
                         .get("modelHash")
                     ):
@@ -418,9 +615,7 @@ class StreamProcessor(BaseProcessor):
                     continue
 
                 # 普通 token
-                if (token := resp.get("token")) is not None:
-                    if not token:
-                        continue
+                if token:
                     filtered = self._filter_token(token)
                     if not filtered:
                         continue
@@ -436,16 +631,33 @@ class StreamProcessor(BaseProcessor):
                             yield self._sse("\n</think>\n")
                             self.think_opened = False
                     yield self._sse(filtered)
-                    if (not in_think) and filtered.strip() and (
-                        not re.match(
-                            r"^(?:\[[^\]]+\])?\[(WebSearch|SearchImage|AgentThink)\]",
-                            filtered.strip(),
-                        )
-                    ):
-                        self.answer_text += filtered
+                    self._track_answer_chunk(filtered, in_think=in_think)
+
+            if self._tool_branch_enabled and self._tool_mode_enabled:
+                plan = self._tool_planner.plan(
+                    self._tool_raw_buffer,
+                    tools=self.tools,
+                    tool_choice=self.tool_choice,
+                )
+                if plan.error and self.tool_call_strict:
+                    raise UpstreamException(
+                        message=f"Invalid tool call payload: {plan.error}",
+                        details={"error": plan.error, "type": "invalid_tool_call_payload"},
+                    )
+                if plan.is_tool_call and plan.tool_calls:
+                    if not self.role_sent:
+                        yield self._sse(role="assistant")
+                        self.role_sent = True
+                    chunks = self._yield_tool_call_delta_chunks(
+                        [tc.to_openai_dict() for tc in plan.tool_calls]
+                    )
+                    for item in chunks:
+                        yield item
+                    return
 
             if self.think_opened:
                 yield self._sse("</think>\n")
+                self.think_opened = False
             yield self._sse(finish="stop")
             yield "data: [DONE]\n\n"
         except asyncio.CancelledError:
@@ -487,10 +699,27 @@ class StreamProcessor(BaseProcessor):
 class CollectProcessor(BaseProcessor):
     """非流式响应处理器"""
 
-    def __init__(self, model: str, token: str = ""):
+    def __init__(
+        self,
+        model: str,
+        token: str = "",
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any = None,
+    ):
         super().__init__(model, token)
         self.image_format = get_config("app.image_format")
         self.filter_tags = get_config("chat.filter_tags")
+        self.tools = tools or []
+        self.tool_choice = tool_choice
+        self.tool_call_simulation_enabled = bool(
+            get_config("chat.tool_call_simulation_enabled", True)
+        )
+        self.tool_call_prefix = get_config("chat.tool_call_prefix", "<|tool_call|>")
+        self.tool_call_strict = bool(get_config("chat.tool_call_strict", True))
+        self._tool_planner = ToolCallPlanner(
+            prefix=self.tool_call_prefix,
+            strict=self.tool_call_strict,
+        )
 
     def _filter_content(self, content: str) -> str:
         """过滤内容中的特殊标签，对 xai:tool_usage_card 提取工具调用信息"""
@@ -533,7 +762,9 @@ class CollectProcessor(BaseProcessor):
         response_id = ""
         fingerprint = ""
         content = ""
+        token_buffer = ""
         idle_timeout = get_config("timeout.stream_idle_timeout")
+        reasoning_content = ""
 
         try:
             async for line in _with_idle_timeout(response, idle_timeout, self.model):
@@ -549,10 +780,54 @@ class CollectProcessor(BaseProcessor):
 
                 if (llm := resp.get("llmInfo")) and not fingerprint:
                     fingerprint = llm.get("modelHash", "")
+                if rid := resp.get("responseId"):
+                    response_id = rid
+                if (token := resp.get("token")) is not None and token:
+                    token_buffer += token
+
+                agent_name = resp.get("rolloutId", "AI")
+                if tool_card := resp.get("toolUsageCard"):
+                    if query := (
+                        tool_card.get("webSearch", {})
+                        .get("args", {})
+                        .get("query")
+                    ):
+                        reasoning_content += f"{agent_name}: 正在搜索 `{query}` 中...\n"
+                    if agent_talk := (
+                        tool_card.get("chatroomSend", {})
+                        .get("args", {})
+                        .get("message")
+                    ):
+                        reasoning_content += f"{agent_name}: {agent_talk}\n"
+
+                if search_results := resp.get("webSearchResults"):
+                    if results := search_results.get("results", []):
+                        if results:
+                            reasoning_content += f"{agent_name} 搜索结果:\n"
+                        for result in results:
+                            url = result.get("url", "")
+                            title = result.get("title", "")
+                            preview = result.get("preview", "")
+                            reasoning_content += f"[{title}]({url})\n> {preview}\n\n"
 
                 if mr := resp.get("modelResponse"):
-                    response_id = mr.get("responseId", "")
-                    content = mr.get("message", "")
+                    response_id = mr.get("responseId", "") or response_id
+                    if isinstance(mr.get("message"), str):
+                        content = mr.get("message", "")
+
+                    if model_search := mr.get("webSearchResults"):
+                        model_results = []
+                        if isinstance(model_search, dict):
+                            model_results = model_search.get("results", []) or []
+                        elif isinstance(model_search, list):
+                            model_results = model_search
+                        if model_results:
+                            reasoning_content += "最终使用的搜索结果:\n"
+                            for result in model_results:
+                                url = result.get("url", "")
+                                title = result.get("title", "")
+                                preview = result.get("preview", "")
+                                reasoning_content += f"[{title}]({url})\n> {preview}\n\n"
 
                     if urls := _collect_image_urls(mr):
                         content += "\n"
@@ -607,7 +882,53 @@ class CollectProcessor(BaseProcessor):
         finally:
             await self.close()
 
+        tool_calls = None
+        raw_tool_text = ""
+        candidates: list[str] = []
+        if isinstance(token_buffer, str) and token_buffer.strip():
+            candidates.append(token_buffer)
+        if isinstance(content, str) and content.strip():
+            candidates.append(content)
+
+        for candidate in candidates:
+            if candidate.lstrip().startswith(self.tool_call_prefix):
+                raw_tool_text = candidate
+                break
+
+        if (
+            self.tool_call_simulation_enabled
+            and self.tools
+            and self.tool_choice != "none"
+            and raw_tool_text
+        ):
+            plan = self._tool_planner.plan(
+                raw_tool_text,
+                tools=self.tools,
+                tool_choice=self.tool_choice,
+            )
+            if plan.error and self.tool_call_strict:
+                raise UpstreamException(
+                    message=f"Invalid tool call payload: {plan.error}",
+                    details={"error": plan.error, "type": "invalid_tool_call_payload"},
+                )
+            if plan.is_tool_call and plan.tool_calls:
+                tool_calls = [tc.to_openai_dict() for tc in plan.tool_calls]
+
         content = self._filter_content(content)
+
+        message: dict[str, Any] = {
+            "role": "assistant",
+            "content": content,
+            "refusal": None,
+            "annotations": [],
+        }
+        finish_reason = "stop"
+        if tool_calls:
+            message["content"] = ""
+            message["tool_calls"] = tool_calls
+            finish_reason = "tool_calls"
+        if reasoning_content and get_config("chat.thinking"):
+            message["reasoning_content"] = reasoning_content
 
         return {
             "id": response_id,
@@ -618,13 +939,8 @@ class CollectProcessor(BaseProcessor):
             "choices": [
                 {
                     "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": content,
-                        "refusal": None,
-                        "annotations": [],
-                    },
-                    "finish_reason": "stop",
+                    "message": message,
+                    "finish_reason": finish_reason,
                 }
             ],
             "usage": {

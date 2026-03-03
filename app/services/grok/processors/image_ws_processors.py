@@ -342,7 +342,7 @@ class ImageWSCollectProcessor(ImageWSBaseProcessor):
             # 统一 is_final 标记
             if item.get("stage") == "final":
                 item["is_final"] = True
-                
+            
             images[image_id] = self._pick_best(images.get(image_id), item)
 
         selected = sorted(

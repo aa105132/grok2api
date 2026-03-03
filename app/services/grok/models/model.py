@@ -7,6 +7,7 @@ Grok 模型管理服务
 
 from enum import Enum
 from typing import Optional, Tuple, List, Dict
+
 from pydantic import BaseModel, Field
 
 from app.core.exceptions import ValidationException
@@ -56,6 +57,7 @@ class ModelService:
 
     # 内置模型（基线，始终可用）
     BUILTIN_MODELS = [
+        # deprecated
         ModelInfo(
             model_id="grok-3",
             grok_model="grok-3",
@@ -63,6 +65,7 @@ class ModelService:
             cost=Cost.LOW,
             display_name="GROK-3",
         ),
+        # deprecated
         ModelInfo(
             model_id="grok-3-mini",
             grok_model="grok-3",
@@ -70,6 +73,7 @@ class ModelService:
             cost=Cost.LOW,
             display_name="GROK-3-MINI",
         ),
+        # deprecated
         ModelInfo(
             model_id="grok-3-thinking",
             grok_model="grok-3",
@@ -77,6 +81,7 @@ class ModelService:
             cost=Cost.LOW,
             display_name="GROK-3-THINKING",
         ),
+        # deprecated
         ModelInfo(
             model_id="grok-4",
             grok_model="grok-4",
@@ -84,6 +89,7 @@ class ModelService:
             cost=Cost.LOW,
             display_name="GROK-4",
         ),
+        # deprecated
         ModelInfo(
             model_id="grok-4-mini",
             grok_model="grok-4-mini",
@@ -91,6 +97,7 @@ class ModelService:
             cost=Cost.LOW,
             display_name="GROK-4-MINI",
         ),
+        # deprecated
         ModelInfo(
             model_id="grok-4-thinking",
             grok_model="grok-4",
@@ -98,6 +105,7 @@ class ModelService:
             cost=Cost.LOW,
             display_name="GROK-4-THINKING",
         ),
+        # deprecated
         ModelInfo(
             model_id="grok-4-heavy",
             grok_model="grok-4",
@@ -106,6 +114,7 @@ class ModelService:
             tier=Tier.SUPER,
             display_name="GROK-4-HEAVY",
         ),
+        # deprecated
         ModelInfo(
             model_id="grok-4.1-mini",
             grok_model="grok-4-1-thinking-1129",
@@ -168,6 +177,30 @@ class ModelService:
             description="Video generation model",
             is_video=True,
         ),
+        # deprecated
+        ModelInfo(
+            model_id="grok-4.1-fast",
+            grok_model="grok-4-1-thinking-1129",
+            model_mode="MODEL_MODE_FAST",
+            cost=Cost.LOW,
+            display_name="GROK-4.1-FAST",
+        ),
+        # deprecated
+        ModelInfo(
+            model_id="grok-4.1-expert",
+            grok_model="grok-4-1-thinking-1129",
+            model_mode="MODEL_MODE_EXPERT",
+            cost=Cost.HIGH,
+            display_name="GROK-4.1-EXPERT",
+        ),
+        # deprecated
+        ModelInfo(
+            model_id="grok-4.1-thinking",
+            grok_model="grok-4-1-thinking-1129",
+            model_mode="MODEL_MODE_GROK_4_1_THINKING",
+            cost=Cost.HIGH,
+            display_name="GROK-4.1-THINKING",
+        ),
     ]
 
     # 兼容旧引用
@@ -214,7 +247,9 @@ class ModelService:
 
         for idx, model_cfg in enumerate(custom_models_config):
             if not isinstance(model_cfg, dict):
-                logger.warning(f"Custom model #{idx}: expected dict, got {type(model_cfg).__name__}, skipping.")
+                logger.warning(
+                    f"Custom model #{idx}: expected dict, got {type(model_cfg).__name__}, skipping."
+                )
                 continue
 
             # 必填字段检查
@@ -230,7 +265,9 @@ class ModelService:
                     model_mode=model_cfg.get("model_mode", "MODEL_MODE_FAST"),
                     tier=Tier(model_cfg.get("tier", "basic")),
                     cost=Cost(model_cfg.get("cost", "low")),
-                    display_name=model_cfg.get("display_name", model_cfg["model_id"].upper()),
+                    display_name=model_cfg.get(
+                        "display_name", model_cfg["model_id"].upper()
+                    ),
                     description=model_cfg.get("description", ""),
                     is_video=model_cfg.get("is_video", False),
                     is_image=model_cfg.get("is_image", False),
@@ -246,7 +283,9 @@ class ModelService:
                     logger.debug(f"Custom model '{model_id}' registered.")
 
             except Exception as e:
-                logger.warning(f"Custom model #{idx} ('{model_id}'): invalid config - {e}, skipping.")
+                logger.warning(
+                    f"Custom model #{idx} ('{model_id}'): invalid config - {e}, skipping."
+                )
                 continue
 
         cls._map = merged

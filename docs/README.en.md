@@ -84,17 +84,14 @@ Default password: `grok2api` (config key `app.app_key`, change it in production)
 
 | Model | Cost | Account | Chat | Image | Video |
 | :--- | :---: | :--- | :---: | :---: | :---: |
-| `grok-3` | 1 | Basic/Super | Yes | Yes | - |
-| `grok-3-fast` | 1 | Basic/Super | Yes | Yes | - |
-| `grok-4` | 1 | Basic/Super | Yes | Yes | - |
-| `grok-4-mini` | 1 | Basic/Super | Yes | Yes | - |
-| `grok-4-fast` | 1 | Basic/Super | Yes | Yes | - |
-| `grok-4-heavy` | 4 | Super | Yes | Yes | - |
-| `grok-4.1` | 1 | Basic/Super | Yes | Yes | - |
-| `grok-4.1-thinking` | 4 | Basic/Super | Yes | Yes | - |
+| `grok-4.20-fast` | 1 | Basic/Super | Yes | Yes | - |
+| `grok-4.20` | 4 | Basic/Super | Yes | Yes | - |
+| `grok-4.20-expert` | 4 | Basic/Super | Yes | Yes | - |
 | `grok-imagine-1.0` | 4 | Basic/Super | - | Yes | - |
 | `grok-imagine-1.0-edit` | 4 | Basic/Super | - | Yes | - |
 | `grok-imagine-1.0-video` | - | Basic/Super | - | - | Yes |
+
+> Note: Deprecated models (such as `grok-3`, `grok-4`, and `grok-4.1-*`) remain backward-compatible. Requests to them are redirected by upstream and are no longer listed here.
 
 <br>
 

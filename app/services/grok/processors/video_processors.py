@@ -36,12 +36,20 @@ class VideoStreamProcessor(BaseProcessor):
         else:
             self.show_think = think
 
-    def _sse(self, content: str = "", role: str = None, finish: str = None) -> str:
+    def _sse(
+        self,
+        content: str = "",
+        role: str = None,
+        finish: str = None,
+        reasoning_content: str = None,
+    ) -> str:
         """构建 SSE 响应"""
         delta = {}
         if role:
             delta["role"] = role
             delta["content"] = ""
+        if reasoning_content is not None:
+            delta["reasoning_content"] = reasoning_content
         elif content:
             delta["content"] = content
 
@@ -93,21 +101,21 @@ class VideoStreamProcessor(BaseProcessor):
                     self.role_sent = True
 
                 # 视频生成进度
-                if video_resp := resp.get("streamingVideoGenerationResponse"):
-                    progress = video_resp.get("progress", 0)
+                if video_response := resp.get("streamingVideoGenerationResponse"):
+                    progress = video_response.get("progress", 0)
 
                     if self.show_think:
                         if not self.think_opened:
-                            yield self._sse("<think>\n")
                             self.think_opened = True
-                        yield self._sse(f"正在生成视频中，当前进度{progress}%\n")
+                        yield self._sse(
+                            reasoning_content=f"正在生成视频中，当前进度{progress}%\n"
+                        )
 
-                    if progress == 100:
-                        video_url = video_resp.get("videoUrl", "")
-                        thumbnail_url = video_resp.get("thumbnailImageUrl", "")
+                    if progress >= 100:
+                        video_url = video_response.get("videoUrl", "")
+                        thumbnail_url = video_response.get("thumbnailImageUrl", "")
 
                         if self.think_opened and self.show_think:
-                            yield self._sse("</think>\n")
                             self.think_opened = False
 
                         if video_url:
@@ -127,10 +135,13 @@ class VideoStreamProcessor(BaseProcessor):
                                 yield self._sse(video_html)
 
                             logger.info(f"Video generated: {video_url}")
+                        else:
+                            logger.warning(f"Video generation failed: {video_response}")
+                            yield self._sse("视频生成失败，可能是被审查拦截了")
                     continue
-
+            
             if self.think_opened:
-                yield self._sse("</think>\n")
+                self.think_opened = False
             yield self._sse(finish="stop")
             yield "data: [DONE]\n\n"
         except asyncio.CancelledError:
@@ -205,11 +216,11 @@ class VideoCollectProcessor(BaseProcessor):
 
                 resp = data.get("result", {}).get("response", {})
 
-                if video_resp := resp.get("streamingVideoGenerationResponse"):
-                    if video_resp.get("progress") == 100:
+                if video_response := resp.get("streamingVideoGenerationResponse"):
+                    if video_response.get("progress") >= 100:
                         response_id = resp.get("responseId", "")
-                        video_url = video_resp.get("videoUrl", "")
-                        thumbnail_url = video_resp.get("thumbnailImageUrl", "")
+                        video_url = video_response.get("videoUrl", "")
+                        thumbnail_url = video_response.get("thumbnailImageUrl", "")
 
                         if video_url:
                             final_video_url = await self.process_url(video_url, "video")
@@ -226,6 +237,9 @@ class VideoCollectProcessor(BaseProcessor):
                                     final_video_url, final_thumbnail_url
                                 )
                             logger.info(f"Video generated: {video_url}")
+                        else:
+                            logger.warning(f"Video generation failed: {video_response}")
+                            content = "视频生成失败，可能是被审查拦截了"
 
         except asyncio.CancelledError:
             logger.debug(

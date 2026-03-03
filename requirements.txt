@@ -50,3 +50,4 @@ yarl==1.22.0
 tomli
 itsdangerous>=2.2.0
 websockets>=16.0
+pillow
