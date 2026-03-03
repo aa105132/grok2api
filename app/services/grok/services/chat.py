@@ -286,6 +286,13 @@ class ChatRequestBuilder:
             "toolOverrides": {},
             "enableSideBySide": True,
             "sendFinalMetadata": True,
+            "disableSelfHarmShortCircuit": False,
+            "disableTextFollowUps": False,
+            "enable420": False,
+            "isAsyncChat": False,
+            "isReasoning": False,
+            "forceSideBySide": False,
+            "returnRawGrokInXaiRequest": False,
             "responseMetadata": {
                 "modelConfigOverride": {"modelMap": {}},
                 "requestModelDetails": {"modelId": model},
@@ -303,6 +310,8 @@ class ChatRequestBuilder:
 
         if mode:
             payload["modelMode"] = mode
+        else:
+            payload["modelMode"] = "MODEL_MODE_AUTO"
 
         return payload
 
