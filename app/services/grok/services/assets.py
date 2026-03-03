@@ -21,7 +21,7 @@ except ImportError:
     fcntl = None
 
 import aiofiles
-from curl_cffi.requests import AsyncSession
+from curl_cffi.requests import AsyncSession, Response
 import PIL.Image
 
 from app.core.config import get_config
@@ -37,6 +37,7 @@ UPLOAD_API = "https://grok.com/rest/app-chat/upload-file"
 LIST_API = "https://grok.com/rest/assets"
 DELETE_API = "https://grok.com/rest/assets-metadata"
 DOWNLOAD_API = "https://assets.grok.com"
+VIDEO_UPSCALE_API = "https://grok.com/rest/media/video/upscale"
 LOCK_DIR = DATA_DIR / ".locks"
 
 # 全局信号量（运行时动态初始化）
@@ -278,7 +279,7 @@ class BaseService:
 
         try:
             async with AsyncSession() as session:
-                response = await session.get(url, timeout=10)
+                response : Response = await session.get(url, timeout=10)
                 if response.status_code >= 400:
                     raise UpstreamException(
                         message=f"Failed to fetch: {response.status_code} {url}",
@@ -378,7 +379,7 @@ class UploadService(BaseService):
 
             # 执行上传
             session = await self._get_session()
-            response = await session.post(
+            response : Response = await session.post(
                 UPLOAD_API,
                 headers=self._build_headers(token),
                 json={"fileName": filename, "fileMimeType": mime, "content": b64},
@@ -452,7 +453,7 @@ class ListService(BaseService):
                 else:
                     params.pop("pageToken", None)
 
-                response = await session.get(
+                response : Response = await session.get(
                     LIST_API,
                     headers=headers,
                     params=params,
@@ -502,7 +503,7 @@ class DeleteService(BaseService):
         """删除单个文件"""
         async with _get_assets_semaphore():
             session = await self._get_session()
-            response = await session.delete(
+            response : Response = await session.delete(
                 f"{DELETE_API}/{asset_id}",
                 headers=self._build_headers(token, referer="https://grok.com/files"),
                 impersonate=self.config.browser,
@@ -575,6 +576,66 @@ class DeleteService(BaseService):
             return False
 
 
+# ==================== 视频放大服务 ====================
+
+
+class VideoUpscaleService(BaseService):
+    """视频放大服务"""
+
+    async def upscale(self, token: str, video_id: str) -> Dict[str, str]:
+        """将视频放大到高清，返回高清地址"""
+        async with _get_assets_semaphore():
+            if not isinstance(video_id, str) or not video_id.strip():
+                raise ValidationException("Invalid videoId")
+
+            session = await self._get_session()
+            response : Response = await session.post(
+                VIDEO_UPSCALE_API,
+                headers=self._build_headers(token, referer="https://grok.com/imagine"),
+                json={"videoId": video_id.strip()},
+                impersonate=self.config.browser,
+                timeout=self.config.timeout,
+                proxies=self.config.get_proxies(),
+            )
+
+            if response.status_code == 200:
+                try:
+                    result = response.json()
+                except Exception:
+                    result = {}
+
+                hd_media_url = result.get("hdMediaUrl", "")
+                logger.info(f"Video upscale success: {video_id}")
+                return {"hdMediaUrl": hd_media_url}
+
+            if response.status_code in (401, 403):
+                logger.warning(f"Video upscale auth failed: {response.status_code}")
+                try:
+                    await TokenService.record_fail(
+                        token, response.status_code, "video_upscale_auth_failed"
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to record token failure: {e}")
+
+                raise UpstreamException(
+                    message=f"Video upscale authentication failed: {response.status_code}",
+                    details={"status": response.status_code, "token_invalidated": True},
+                )
+
+            if response.status_code == 400:
+                raise ValidationException(
+                    f"Video upscale failed: {response.text[:100]}"
+                )
+
+            logger.error(
+                f"Video upscale failed: {video_id} - {response.status_code} - {response.text[:100]}"
+            )
+            raise UpstreamException(
+                message=f"Video upscale failed: {response.status_code}",
+                details={"status": response.status_code, "videoId": video_id},
+            )
+
+
 # ==================== 下载服务 ====================
 
 
@@ -641,7 +702,7 @@ class DownloadService(BaseService):
         headers = self._build_headers(token, download=True)
 
         session = await self._get_session()
-        response = await session.get(
+        response : Response = await session.get(
             url,
             headers=headers,
             proxies=self.config.get_proxies(),
@@ -861,5 +922,6 @@ __all__ = [
     "UploadService",
     "ListService",
     "DeleteService",
+    "VideoUpscaleService",
     "DownloadService",
 ]
