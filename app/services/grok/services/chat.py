@@ -288,7 +288,7 @@ class ChatRequestBuilder:
             "sendFinalMetadata": True,
             "disableSelfHarmShortCircuit": False,
             "disableTextFollowUps": False,
-            "enable420": False,
+            "enable420": "4.20" in model,
             "isAsyncChat": False,
             "isReasoning": False,
             "forceSideBySide": False,
