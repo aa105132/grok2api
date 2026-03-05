@@ -110,7 +110,7 @@ class VideoConfig(BaseModel):
     )
     video_length: Optional[int] = Field(6, description="视频时长(秒): 6 / 10 / 15")
     resolution_name: Optional[str] = Field("480p", description="视频分辨率: 480p, 720p")
-    preset: Optional[str] = Field("custom", description="风格预设: fun, normal, spicy")
+    preset: Optional[str] = Field("spicy", description="风格预设: fun, normal, spicy")
 
     @field_validator("aspect_ratio")
     @classmethod
