@@ -12,7 +12,6 @@ from curl_cffi.requests.errors import RequestsError
 from app.core.config import get_config
 from app.core.logger import logger
 from app.core.exceptions import UpstreamException
-from app.services.grok.services.assets import VideoUpscaleService
 from .base import (
     BaseProcessor,
     StreamIdleTimeoutError,
@@ -20,30 +19,6 @@ from .base import (
     _normalize_stream_line,
     _is_http2_stream_error,
 )
-
-
-async def _upscale_video_url(video_url: str, video_id: str, token: str) -> str:
-    """优先调用视频放大服务，失败时回退原始视频 URL"""
-    if not video_url or not video_id or not token:
-        return video_url
-
-    upscale_service = VideoUpscaleService()
-    try:
-        result = await upscale_service.upscale(token, video_id)
-        hd_media_url = result.get("hdMediaUrl", "")
-        if hd_media_url:
-            logger.info(f"Video upscale success: video_id={video_id}")
-            return hd_media_url
-
-        logger.warning(f"Video upscale returned empty hdMediaUrl: video_id={video_id}")
-    except Exception as e:
-        logger.warning(
-            f"Video upscale failed, fallback to original video: video_id={video_id}, error={e}"
-        )
-    finally:
-        await upscale_service.close()
-
-    return video_url
 
 
 class VideoStreamProcessor(BaseProcessor):
@@ -139,16 +114,12 @@ class VideoStreamProcessor(BaseProcessor):
                     if progress >= 100:
                         video_url = video_response.get("videoUrl", "")
                         thumbnail_url = video_response.get("thumbnailImageUrl", "")
-                        video_id = video_response.get("videoId", "")
 
                         if self.think_opened and self.show_think:
                             self.think_opened = False
 
                         if video_url:
-                            best_video_url = await _upscale_video_url(
-                                video_url, video_id, self.token
-                            )
-                            final_video_url = await self.process_url(best_video_url, "video")
+                            final_video_url = await self.process_url(video_url, "video")
                             final_thumbnail_url = ""
                             if thumbnail_url:
                                 final_thumbnail_url = await self.process_url(
@@ -163,9 +134,7 @@ class VideoStreamProcessor(BaseProcessor):
                                 )
                                 yield self._sse(video_html)
 
-                            logger.info(
-                                f"Video generated: original={video_url}, selected={best_video_url}, video_id={video_id}"
-                            )
+                            logger.info(f"Video generated: {video_url}")
                         else:
                             logger.warning(f"Video generation failed: {video_response}")
                             yield self._sse("视频生成失败，可能是被审查拦截了")
@@ -252,13 +221,9 @@ class VideoCollectProcessor(BaseProcessor):
                         response_id = resp.get("responseId", "")
                         video_url = video_response.get("videoUrl", "")
                         thumbnail_url = video_response.get("thumbnailImageUrl", "")
-                        video_id = video_response.get("videoId", "")
 
                         if video_url:
-                            best_video_url = await _upscale_video_url(
-                                video_url, video_id, self.token
-                            )
-                            final_video_url = await self.process_url(best_video_url, "video")
+                            final_video_url = await self.process_url(video_url, "video")
                             final_thumbnail_url = ""
                             if thumbnail_url:
                                 final_thumbnail_url = await self.process_url(
@@ -271,9 +236,7 @@ class VideoCollectProcessor(BaseProcessor):
                                 content = self._build_video_html(
                                     final_video_url, final_thumbnail_url
                                 )
-                            logger.info(
-                                f"Video generated: original={video_url}, selected={best_video_url}, video_id={video_id}"
-                            )
+                            logger.info(f"Video generated: {video_url}")
                         else:
                             logger.warning(f"Video generation failed: {video_response}")
                             content = "视频生成失败，可能是被审查拦截了"
